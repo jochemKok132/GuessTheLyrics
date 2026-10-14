@@ -1,0 +1,80 @@
+@inherits LayoutComponentBase
+@inject IAccountService AccountService
+@inject NavigationManager Navigation
+
+<div class="ml-page">
+    <aside class="ml-sidebar">
+        <a class="brand" href="">
+            <span class="brand-mark">♪</span>
+            <span>GuessTheLyrics</span>
+        </a>
+
+        <nav class="ml-nav">
+            <span class="section-label">Play</span>
+            <NavLink class="ml-nav-link" href="" Match="NavLinkMatch.All">Search a song</NavLink>
+            <NavLink class="ml-nav-link" href="players" Match="NavLinkMatch.All">Players</NavLink>
+            <AuthorizeView>
+                <Authorized>
+                    <NavLink class="ml-nav-link" href="@($"players/{Uri.EscapeDataString(context.User.Identity?.Name ?? "")}")">My progress</NavLink>
+                </Authorized>
+            </AuthorizeView>
+        </nav>
+
+        <div class="account">
+            <span class="section-label">Account</span>
+            <AuthorizeView>
+                <Authorized>
+                    <div class="account-name">
+                        <span class="avatar">@Initial(context.User.Identity?.Name)</span>
+                        <span>@context.User.Identity?.Name</span>
+                    </div>
+                    <button class="btn btn-secondary btn-small" @onclick="LogoutAsync">Log out</button>
+                </Authorized>
+                <NotAuthorized>
+                    <p class="muted small">Log in to save your progress and show up on the leaderboard.</p>
+                    <div class="account-actions">
+                        <a class="btn btn-small" href="@LoginUrl("login")">Log in</a>
+                        <a class="btn btn-secondary btn-small" href="@LoginUrl("register")">Sign up</a>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+
+        <div class="how-to">
+            <span class="section-label">How to play</span>
+            <p>Pick a song and type every word you remember. A correct word is revealed everywhere it appears and the box clears, so just keep typing.</p>
+            <p>Short words like "a" wait while a longer hidden word starts the same way; press space to enter them.</p>
+        </div>
+
+        <footer class="sidebar-footer">
+            <span>v@(version)</span>
+            <span>Lyrics by <a href="https://lrclib.net" target="_blank" rel="noopener">LRCLIB</a></span>
+        </footer>
+    </aside>
+
+    <main class="ml-main-content">
+        @Body
+    </main>
+</div>
+
+@code {
+    private static readonly string version = AppVersion.Of(typeof(MainLayout).Assembly);
+
+    private static string Initial(string? name) =>
+        string.IsNullOrEmpty(name) ? "?" : name[..1].ToUpperInvariant();
+
+    // Come back to the current page after logging in.
+    private string LoginUrl(string page)
+    {
+        var current = Navigation.ToBaseRelativePath(Navigation.Uri);
+        return current.StartsWith("login") || current.StartsWith("register")
+            ? page
+            : $"{page}?returnUrl={Uri.EscapeDataString("/" + current)}";
+    }
+
+    private async Task LogoutAsync()
+    {
+        await AccountService.LogoutAsync();
+        Navigation.NavigateTo("");
+    }
+}

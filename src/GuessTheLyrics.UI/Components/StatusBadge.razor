@@ -1,0 +1,20 @@
+<span class="badge @CssClass">@Label</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public ProgressStatusDto Status { get; set; }
+
+    private string Label => Status switch
+    {
+        ProgressStatusDto.Completed => "Completed",
+        ProgressStatusDto.GaveUp => "Gave up",
+        _ => "Playing"
+    };
+
+    private string CssClass => Status switch
+    {
+        ProgressStatusDto.Completed => "badge-success",
+        ProgressStatusDto.GaveUp => "badge-danger",
+        _ => "badge-accent"
+    };
+}

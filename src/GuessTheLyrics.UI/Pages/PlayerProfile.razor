@@ -1,0 +1,156 @@
+@page "/players/{Username}"
+@inject IPlayerService PlayerService
+
+<PageTitle>@Username · GuessTheLyrics</PageTitle>
+
+@if (error is not null)
+{
+    <h1 class="page-title" tabindex="-1">@Username</h1>
+    <div class="alert-danger">@error</div>
+    <p><a href="players">Back to players</a></p>
+}
+else if (profile is null)
+{
+    <div class="spinner" aria-label="Loading player"></div>
+}
+else
+{
+    var summary = profile.Summary;
+
+    <div class="profile-header">
+        <span class="avatar avatar-large">@summary.Username[..1].ToUpperInvariant()</span>
+        <div>
+            <h1 class="page-title" tabindex="-1">
+                @summary.Username
+                @if (IsMe)
+                {
+                    <span class="you">you</span>
+                }
+            </h1>
+            <p class="muted">Rank #@summary.Rank · joined @summary.JoinedAt.ToLocalTime().ToString("d MMM yyyy")</p>
+        </div>
+    </div>
+
+    <div class="stat-tiles">
+        <div class="stat-tile card"><span class="section-label">Rank</span><span class="stat-value">#@summary.Rank</span></div>
+        <div class="stat-tile card"><span class="section-label">Completed</span><span class="stat-value">@summary.SongsCompleted</span></div>
+        <div class="stat-tile card"><span class="section-label">Songs played</span><span class="stat-value">@summary.SongsPlayed</span></div>
+        <div class="stat-tile card"><span class="section-label">Avg. best</span><span class="stat-value">@summary.AverageBestPercentage%</span></div>
+        <div class="stat-tile card"><span class="section-label">Words found</span><span class="stat-value">@summary.WordsFound.ToString("N0")</span></div>
+    </div>
+
+    <div class="section-head">
+        <h2 class="section-title">Songs</h2>
+        <div class="tabs" role="tablist">
+            @foreach (var option in filters)
+            {
+                <button class="tab @(filter == option.Status ? "active" : "")" role="tab"
+                        aria-selected="@(filter == option.Status)"
+                        @onclick="() => filter = option.Status">
+                    @option.Label <span class="tab-count">@Count(option.Status)</span>
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (!FilteredSongs.Any())
+    {
+        <p class="muted">
+            @(profile.Songs.Count == 0
+                ? (IsMe ? "You haven't played anything yet." : $"{summary.Username} hasn't played anything yet.")
+                : "No songs in this list.")
+            @if (IsMe && profile.Songs.Count == 0)
+            {
+                <a href="">Search a song</a>
+            }
+        </p>
+    }
+    else
+    {
+        <div class="card table-card">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Song</th>
+                        <th>Current</th>
+                        <th class="num">Best</th>
+                        <th class="num hide-small">Best time</th>
+                        <th class="hide-small">Status</th>
+                        <th class="hide-small">Last played</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var song in FilteredSongs)
+                    {
+                        <tr>
+                            <td>
+                                <a class="song-link" href="play/@song.SongId">@song.Title</a>
+                                <span class="muted song-artist">@song.Artist</span>
+                            </td>
+                            <td>
+                                <div class="score-cell">
+                                    <MiniProgress Value="song.Percentage" Complete="song.Status == ProgressStatusDto.Completed" />
+                                    <span>@song.Percentage%</span>
+                                </div>
+                            </td>
+                            <td class="num">@song.BestPercentage%</td>
+                            <td class="num hide-small">@Format.Seconds(song.BestTimeSeconds)</td>
+                            <td class="hide-small"><StatusBadge Status="song.Status" /></td>
+                            <td class="muted hide-small">@Format.Relative(song.LastPlayedAt)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [Parameter]
+    public string Username { get; set; } = string.Empty;
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private static readonly (ProgressStatusDto? Status, string Label)[] filters =
+    [
+        (null, "All"),
+        (ProgressStatusDto.InProgress, "Playing"),
+        (ProgressStatusDto.Completed, "Completed"),
+        (ProgressStatusDto.GaveUp, "Gave up")
+    ];
+
+    private PlayerProfileResponse? profile;
+    private string? error;
+    private string? me;
+    private string? loadedFor;
+    private ProgressStatusDto? filter;
+
+    private bool IsMe => string.Equals(me, Username, StringComparison.OrdinalIgnoreCase);
+
+    private IEnumerable<SongProgressResponse> FilteredSongs =>
+        profile?.Songs.Where(s => filter is null || s.Status == filter) ?? [];
+
+    private int Count(ProgressStatusDto? status) =>
+        profile?.Songs.Count(s => status is null || s.Status == status) ?? 0;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (AuthState is not null)
+            me = (await AuthState).User.Identity?.Name;
+
+        if (loadedFor == Username)
+            return;
+
+        loadedFor = Username;
+        profile = null;
+        error = null;
+        filter = null;
+
+        var response = await PlayerService.GetProfileAsync(Username);
+        if (response.Succeeded)
+            profile = response.Value;
+        else
+            error = response.Message;
+    }
+}

@@ -1,1 +1,16 @@
-<Solution />
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".github/workflows/ci-build-test.yml" />
+    <File Path="Directory.Build.props" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/GuessTheLyrics.API/GuessTheLyrics.API.csproj" />
+    <Project Path="src/GuessTheLyrics.Application/GuessTheLyrics.Application.csproj" />
+    <Project Path="src/GuessTheLyrics.Domain/GuessTheLyrics.Domain.csproj" />
+    <Project Path="src/GuessTheLyrics.Infrastructure/GuessTheLyrics.Infrastructure.csproj" />
+    <Project Path="src/GuessTheLyrics.Shared/GuessTheLyrics.Shared.csproj" />
+    <Project Path="src/GuessTheLyrics.UI/GuessTheLyrics.UI.csproj" />
+    <Project Path="src/GuessTheLyrics.UnitTests/GuessTheLyrics.UnitTests.csproj" />
+  </Folder>
+</Solution>

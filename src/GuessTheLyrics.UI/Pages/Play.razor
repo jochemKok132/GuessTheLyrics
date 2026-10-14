@@ -1,0 +1,581 @@
+@page "/play/{Id:long}"
+@using System.Diagnostics
+@implements IDisposable
+@inject ISongService SongService
+@inject IProgressService ProgressService
+@inject NavigationManager Navigation
+
+<PageTitle>@(puzzle is null ? "GuessTheLyrics" : $"{puzzle.Title} · {puzzle.Artist}")</PageTitle>
+
+@if (loading)
+{
+    <div class="spinner" aria-label="Loading lyrics"></div>
+}
+else if (error is not null || puzzle is null)
+{
+    <h1 class="page-title" tabindex="-1">Can't play this song</h1>
+    <div class="alert-danger">@(error ?? "Something went wrong.")</div>
+    <p><a href="">Back to search</a></p>
+}
+else
+{
+    <div class="play-header">
+        <div>
+            <h1 class="page-title" tabindex="-1">@puzzle.Title</h1>
+            <p class="muted">
+                @puzzle.Artist@(string.IsNullOrWhiteSpace(puzzle.Album) ? "" : $" · {puzzle.Album}")
+                · @puzzle.TotalWords words (@puzzle.UniqueWords different)
+            </p>
+        </div>
+        <a class="btn btn-secondary" href="">New song</a>
+    </div>
+
+    <div class="game-bar card">
+        <div class="stat">
+            <span class="section-label">Words</span>
+            <span class="stat-value">@foundWordCount<span class="stat-total"> / @puzzle.TotalWords</span></span>
+        </div>
+        <div class="stat">
+            <span class="section-label">Score</span>
+            <span class="stat-value">@Percentage%</span>
+        </div>
+        <div class="stat">
+            <span class="section-label">Time</span>
+            <span class="stat-value">@Format.Time(Elapsed)</span>
+        </div>
+
+        <div class="guess-wrap">
+            <input @ref="guessInput"
+                   class="guess-input"
+                   @bind="guess"
+                   @bind:event="oninput"
+                   @bind:after="CheckGuess"
+                   @onkeydown="SubmitGuess"
+                   disabled="@(state != GameState.Playing)"
+                   placeholder="@(state == GameState.Playing ? "Type any word from the song..." : "Game over")"
+                   aria-label="Type a word"
+                   autocomplete="off"
+                   autocapitalize="off"
+                   autocorrect="off"
+                   spellcheck="false" />
+            <div class="guess-status">
+                <span class="guess-feedback" aria-live="polite">@missedGuess</span>
+                <span class="save-state" aria-live="polite">@SaveLabel</span>
+            </div>
+        </div>
+
+        @if (state == GameState.Playing)
+        {
+            <button class="btn btn-secondary" @onclick="GiveUpAsync" disabled="@(foundWordCount == 0 && Elapsed == TimeSpan.Zero)">Give up</button>
+        }
+        else
+        {
+            <button class="btn" @onclick="RestartAsync">Play again</button>
+        }
+    </div>
+
+    <div class="progress" role="progressbar" aria-valuenow="@Percentage" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress-fill @(state == GameState.Won ? "complete" : "")" style="width: @(Percentage)%"></div>
+    </div>
+
+    @if (state == GameState.Won)
+    {
+        <div class="alert-success">You typed every word of "@puzzle.Title" in @Format.Time(Elapsed)!</div>
+    }
+    else if (state == GameState.GaveUp)
+    {
+        <div class="alert-danger">
+            You found @foundWordCount of @puzzle.TotalWords words (@Percentage%) in @Format.Time(Elapsed).
+            The words you missed are shown in red.
+        </div>
+    }
+    else if (resumed)
+    {
+        <div class="alert-info">Welcome back: your progress was restored. The timer continues when you start typing.</div>
+    }
+
+    @if (!loggedIn)
+    {
+        <div class="alert-info">
+            <a href="@($"login?returnUrl={Uri.EscapeDataString($"/play/{Id}")}")">Log in</a> or
+            <a href="@($"register?returnUrl={Uri.EscapeDataString($"/play/{Id}")}")">sign up</a>
+            to save your progress on this song.
+        </div>
+    }
+
+    <div class="play-layout">
+        <div class="lyrics card">
+            @foreach (var verse in verses)
+            {
+                var verseFound = verse.Keys.Count(found.Contains);
+                var verseDone = verseFound == verse.Keys.Count && verse.Keys.Count > 0;
+
+                <section class="verse @(verseDone ? "complete" : "")">
+                    <div class="verse-head">
+                        <span>@verse.Label</span>
+                        @if (verse.Keys.Count > 0)
+                        {
+                            <span class="verse-count">@(verseDone ? "✓" : $"{verseFound}/{verse.Keys.Count}")</span>
+                        }
+                    </div>
+
+                    @foreach (var line in verse.Lines)
+                    {
+                        <div class="lyric-line">
+                            @foreach (var token in line.Tokens)
+                            {
+                                if (token.Key is null)
+                                {
+                                    <span class="sep">@token.Text</span>
+                                }
+                                else if (found.Contains(token.Key))
+                                {
+                                    <span class="word found @(token.Key == lastFound ? "just-found" : "")">@token.Text</span>
+                                }
+                                else if (state == GameState.GaveUp)
+                                {
+                                    <span class="word missed">@token.Text</span>
+                                }
+                                else
+                                {
+                                    <span class="word hidden" style="width: @(HiddenWidth(token.Text))px"></span>
+                                }
+                            }
+                        </div>
+                    }
+                </section>
+            }
+        </div>
+
+        <aside class="side-panel card">
+            <div class="side-head">
+                <span class="section-label">Players on this song</span>
+                <span class="muted small">@(songPlayers?.Count ?? 0)</span>
+            </div>
+
+            @if (songPlayers is null)
+            {
+                <p class="muted small">Loading...</p>
+            }
+            else if (songPlayers.Count == 0)
+            {
+                <p class="muted small">Nobody has played this song yet@(loggedIn ? ". You'll be the first!" : ".")</p>
+            }
+            else
+            {
+                <ol class="player-list">
+                    @foreach (var player in songPlayers)
+                    {
+                        var isMe = string.Equals(player.Username, myName, StringComparison.OrdinalIgnoreCase);
+                        <li class="player-row @(isMe ? "me" : "")">
+                            <div class="player-row-top">
+                                <a class="player-link" href="players/@Uri.EscapeDataString(player.Username)">@player.Username</a>
+                                @if (isMe)
+                                {
+                                    <span class="you">you</span>
+                                }
+                                <span class="player-score">@player.BestPercentage%</span>
+                            </div>
+                            <MiniProgress Value="player.BestPercentage" Complete="player.BestTimeSeconds is not null" />
+                            <div class="player-row-meta muted">
+                                @if (player.BestTimeSeconds is not null)
+                                {
+                                    <span>✓ @Format.Seconds(player.BestTimeSeconds)</span>
+                                }
+                                else
+                                {
+                                    <StatusBadge Status="player.Status" />
+                                }
+                                <span>@Format.Relative(player.LastPlayedAt)</span>
+                            </div>
+                        </li>
+                    }
+                </ol>
+            }
+        </aside>
+    </div>
+}
+
+@code {
+    private enum GameState { Playing, Won, GaveUp }
+
+    /// <summary>Lines between two blank lines, with an optional "[Chorus]"-style label.</summary>
+    private sealed record Verse(string Label, List<LyricsLineResponse> Lines, HashSet<string> Keys);
+
+    private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromSeconds(10);
+
+    [Parameter]
+    public long Id { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private LyricsPuzzleResponse? puzzle;
+    private List<Verse> verses = [];
+    private bool loading = true;
+    private string? error;
+    private long loadedId;
+
+    // Normalised word → how many times it appears in the song.
+    private Dictionary<string, int> wordCounts = [];
+    private readonly HashSet<string> found = [];
+    private int foundWordCount;
+    private string? lastFound;
+    private string guess = string.Empty;
+    private GameState state = GameState.Playing;
+    private bool resumed;
+    private string? missedGuess;
+
+    // Time = time from a saved attempt + time played in this visit.
+    private TimeSpan elapsedOffset;
+    private readonly Stopwatch stopwatch = new();
+    private Timer? clock;
+    private ElementReference guessInput;
+    private bool focusPending;
+
+    // Accounts and saving
+    private bool loggedIn;
+    private string? myName;
+    private bool dirty;
+    private bool saving;
+    private bool saveQueued;
+    private DateTime lastSave = DateTime.MinValue;
+    private string? saveError;
+    private bool savedOnce;
+    private bool disposed;
+    private List<SongPlayerResponse>? songPlayers;
+
+    private TimeSpan Elapsed => elapsedOffset + stopwatch.Elapsed;
+
+    private int Percentage => puzzle is null || puzzle.TotalWords == 0
+        ? 0
+        : (int)Math.Floor(foundWordCount * 100.0 / puzzle.TotalWords);
+
+    private string SaveLabel => !loggedIn ? ""
+        : saving ? "Saving..."
+        : saveError is not null ? $"Not saved: {saveError}"
+        : dirty ? "Unsaved changes"
+        : savedOnce ? "Progress saved" : "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (AuthState is not null)
+        {
+            var user = (await AuthState).User;
+            loggedIn = user.Identity?.IsAuthenticated == true;
+            myName = user.Identity?.Name;
+        }
+
+        if (Id == loadedId)
+            return;
+
+        // Switching songs in the same component: save the previous one first.
+        if (dirty)
+            await SaveAsync();
+
+        loadedId = Id;
+        loading = true;
+        error = null;
+        puzzle = null;
+        songPlayers = null;
+
+        var response = await SongService.GetPuzzleAsync(Id);
+        if (response.Succeeded && response.Value is not null)
+        {
+            puzzle = response.Value;
+            wordCounts = puzzle.Lines
+                .SelectMany(l => l.Tokens)
+                .Where(t => t.Key is not null)
+                .GroupBy(t => t.Key!)
+                .ToDictionary(g => g.Key, g => g.Count());
+            verses = BuildVerses(puzzle.Lines);
+            ResetGame();
+
+            if (loggedIn)
+                await RestoreProgressAsync();
+        }
+        else
+        {
+            error = response.Message;
+        }
+
+        loading = false;
+
+        if (puzzle is not null)
+            await LoadPlayersAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (focusPending && puzzle is not null && !loading && state == GameState.Playing)
+        {
+            focusPending = false;
+            try
+            {
+                await guessInput.FocusAsync();
+            }
+            catch (InvalidOperationException)
+            {
+                // Input not rendered yet; the next render tries again.
+                focusPending = true;
+            }
+        }
+    }
+
+    // ---------- Game ----------
+
+    private void CheckGuess()
+    {
+        if (state != GameState.Playing)
+            return;
+
+        // Space or Enter means "this is my word": accept it, or clear a wrong guess.
+        var submitted = guess.Length > 0 && char.IsWhiteSpace(guess[^1]);
+        var key = WordNormalizer.Normalize(guess);
+
+        if (key.Length == 0)
+        {
+            if (submitted)
+                guess = string.Empty;
+            return;
+        }
+
+        StartClock();
+
+        var isUnfoundWord = wordCounts.ContainsKey(key) && !found.Contains(key);
+
+        // Accept right away, unless a longer unfound word starts with what you typed
+        // ("a" while "again" is still hidden): then keep typing, or press space for the short word.
+        if (isUnfoundWord && (submitted || !LongerUnfoundWordStartsWith(key)))
+        {
+            Accept(key);
+        }
+        else if (submitted)
+        {
+            missedGuess = found.Contains(key) ? $"\"{key}\" is already found" : $"\"{key}\" is not in the song";
+            guess = string.Empty;
+        }
+    }
+
+    private void SubmitGuess(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            guess += " ";
+            CheckGuess();
+        }
+    }
+
+    private bool LongerUnfoundWordStartsWith(string key) =>
+        wordCounts.Keys.Any(k => k.Length > key.Length && !found.Contains(k) && k.StartsWith(key, StringComparison.Ordinal));
+
+    private void Accept(string key)
+    {
+        found.Add(key);
+        foundWordCount += wordCounts[key];
+        lastFound = key;
+        missedGuess = null;
+        guess = string.Empty;
+        dirty = true;
+        resumed = false;
+
+        if (found.Count == wordCounts.Count)
+            _ = EndGameAsync(GameState.Won);
+    }
+
+    private Task GiveUpAsync() => EndGameAsync(GameState.GaveUp);
+
+    private async Task EndGameAsync(GameState endState)
+    {
+        state = endState;
+        guess = string.Empty;
+        resumed = false;
+        StopClock();
+        dirty = true;
+        await SaveAsync();
+    }
+
+    private async Task RestartAsync()
+    {
+        ResetGame();
+        dirty = true;
+        await SaveAsync();
+    }
+
+    private void ResetGame()
+    {
+        StopClock();
+        stopwatch.Reset();
+        elapsedOffset = TimeSpan.Zero;
+        found.Clear();
+        foundWordCount = 0;
+        lastFound = null;
+        missedGuess = null;
+        guess = string.Empty;
+        state = GameState.Playing;
+        resumed = false;
+        focusPending = true;
+    }
+
+    private void StartClock()
+    {
+        if (stopwatch.IsRunning)
+            return;
+
+        stopwatch.Start();
+        clock = new Timer(_ => InvokeAsync(OnTickAsync), null, TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500));
+    }
+
+    private void StopClock()
+    {
+        stopwatch.Stop();
+        clock?.Dispose();
+        clock = null;
+    }
+
+    private async Task OnTickAsync()
+    {
+        if (disposed)
+            return;
+
+        if (dirty && DateTime.UtcNow - lastSave >= AutoSaveInterval)
+            await SaveAsync();
+
+        StateHasChanged();
+    }
+
+    // ---------- Saving ----------
+
+    private async Task RestoreProgressAsync()
+    {
+        var response = await ProgressService.GetMineAsync(Id);
+        if (!response.Succeeded || response.Value is not { } saved)
+            return;
+
+        foreach (var key in saved.FoundKeys ?? [])
+        {
+            if (wordCounts.TryGetValue(key, out var count) && found.Add(key))
+                foundWordCount += count;
+        }
+
+        elapsedOffset = TimeSpan.FromSeconds(saved.ElapsedSeconds);
+        state = saved.Status switch
+        {
+            ProgressStatusDto.Completed => GameState.Won,
+            ProgressStatusDto.GaveUp => GameState.GaveUp,
+            _ => GameState.Playing
+        };
+        resumed = state == GameState.Playing && found.Count > 0;
+        savedOnce = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!loggedIn || puzzle is null)
+            return;
+
+        // One save at a time; a save requested meanwhile runs right after with the latest state.
+        if (saving)
+        {
+            saveQueued = true;
+            return;
+        }
+
+        saving = true;
+        var songId = puzzle.Id;
+
+        do
+        {
+            saveQueued = false;
+            dirty = false;
+            lastSave = DateTime.UtcNow;
+
+            var request = new SaveProgressRequest
+            {
+                FoundKeys = found.ToList(),
+                ElapsedSeconds = (int)Elapsed.TotalSeconds,
+                Status = state == GameState.GaveUp ? ProgressStatusDto.GaveUp : ProgressStatusDto.InProgress
+            };
+
+            var response = await ProgressService.SaveAsync(songId, request);
+
+            if (response.Succeeded)
+            {
+                saveError = null;
+                savedOnce = true;
+            }
+            else
+            {
+                saveError = response.Message;
+                dirty = true;
+            }
+        }
+        while (saveQueued);
+
+        saving = false;
+
+        if (disposed)
+            return;
+
+        // Refresh the side panel so your own row (and anyone else's) is current.
+        if (saveError is null)
+            await LoadPlayersAsync();
+
+        StateHasChanged();
+    }
+
+    private async Task LoadPlayersAsync()
+    {
+        var response = await ProgressService.GetPlayersAsync(Id);
+        songPlayers = response.Succeeded ? response.Value ?? [] : [];
+    }
+
+    // ---------- Layout ----------
+
+    private static List<Verse> BuildVerses(IReadOnlyList<LyricsLineResponse> lines)
+    {
+        var result = new List<Verse>();
+        Verse? current = null;
+
+        foreach (var line in lines)
+        {
+            if (line.Tokens.Count == 0)
+            {
+                current = null; // blank line: next line starts a new verse
+                continue;
+            }
+
+            if (line.IsHeader)
+            {
+                current = new Verse(line.Tokens[0].Text.Trim('[', ']', ' '), [], []);
+                result.Add(current);
+                continue;
+            }
+
+            if (current is null)
+            {
+                current = new Verse(string.Empty, [], []);
+                result.Add(current);
+            }
+
+            current.Lines.Add(line);
+            foreach (var token in line.Tokens.Where(t => t.Key is not null))
+                current.Keys.Add(token.Key!);
+        }
+
+        // A label followed by a blank line gives an empty verse; drop those.
+        return result.Where(v => v.Lines.Count > 0).ToList();
+    }
+
+    private static int HiddenWidth(string word) => Math.Clamp(word.Length * 9 + 4, 14, 220);
+
+    public void Dispose()
+    {
+        disposed = true;
+        clock?.Dispose();
+
+        // Leaving the page with unsaved words: save them in the background.
+        if (dirty && loggedIn && puzzle is not null)
+            _ = SaveAsync();
+    }
+}

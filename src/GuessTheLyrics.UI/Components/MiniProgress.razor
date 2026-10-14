@@ -1,0 +1,11 @@
+<div class="mini-progress @(Complete ? "complete" : "")" title="@Value%">
+    <div class="mini-progress-fill" style="width: @(Math.Clamp(Value, 0, 100))%"></div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public int Value { get; set; }
+
+    [Parameter]
+    public bool Complete { get; set; }
+}

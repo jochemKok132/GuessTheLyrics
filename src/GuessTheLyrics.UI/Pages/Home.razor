@@ -1,0 +1,177 @@
+@page "/"
+@inject ISongService SongService
+@inject IPlayerService PlayerService
+@inject NavigationManager Navigation
+
+<PageTitle>GuessTheLyrics</PageTitle>
+
+<h1 class="page-title" tabindex="-1">Search a song</h1>
+<p class="muted">Find any song, then type all of its lyrics from memory.</p>
+
+<form class="search-bar" @onsubmit="SubmitAsync">
+    <input type="search"
+           @bind="query"
+           @bind:event="oninput"
+           placeholder="Song title and/or artist, e.g. bloodhound gang the bad touch"
+           aria-label="Search a song"
+           autocomplete="off" />
+    <button type="submit" class="btn" disabled="@(searching || string.IsNullOrWhiteSpace(query))">
+        @(searching ? "Searching..." : "Search")
+    </button>
+</form>
+
+@if (error is not null)
+{
+    <div class="alert-danger">@error</div>
+}
+else if (searching)
+{
+    <div class="spinner" aria-label="Searching"></div>
+}
+else if (results is not null)
+{
+    @if (results.Count == 0)
+    {
+        <p class="muted">No songs with lyrics found for "@lastQuery". Try the artist name plus the title.</p>
+    }
+    else
+    {
+        <div class="results card">
+            <div class="results-head">
+                <span>Title</span>
+                <span>Artist</span>
+                <span class="hide-small">Album</span>
+                <span class="num">Length</span>
+                <span class="num">Words</span>
+            </div>
+            @foreach (var song in results)
+            {
+                <a class="result-row" href="play/@song.Id">
+                    <span class="title">@song.Title</span>
+                    <span>@song.Artist</span>
+                    <span class="muted hide-small">@song.Album</span>
+                    <span class="num muted">@Format.Duration(song.DurationSeconds)</span>
+                    <span class="num muted">@song.WordCount</span>
+                </a>
+            }
+        </div>
+    }
+}
+
+@if (results is null && !searching && error is null)
+{
+    <AuthorizeView>
+        <Authorized>
+            @if (recent is { Count: > 0 })
+            {
+                <div class="section-head">
+                    <h2 class="section-title">Your recent songs</h2>
+                    <a href="players/@Uri.EscapeDataString(context.User.Identity?.Name ?? "")">All my songs</a>
+                </div>
+                <div class="song-cards">
+                    @foreach (var song in recent)
+                    {
+                        <a class="song-card card" href="play/@song.SongId">
+                            <span class="song-card-title">@song.Title</span>
+                            <span class="muted">@song.Artist</span>
+                            <div class="score-cell">
+                                <MiniProgress Value="song.Percentage" Complete="song.Status == ProgressStatusDto.Completed" />
+                                <span>@song.Percentage%</span>
+                            </div>
+                            <span class="muted small">
+                                <StatusBadge Status="song.Status" /> · @Format.Relative(song.LastPlayedAt)
+                            </span>
+                        </a>
+                    }
+                </div>
+            }
+        </Authorized>
+        <NotAuthorized>
+            <div class="cta card">
+                <div>
+                    <strong>Play with an account</strong>
+                    <p class="muted">Your progress is saved per song, you can continue later, and you appear on the <a href="players">leaderboard</a>.</p>
+                </div>
+                <div class="account-actions">
+                    <a class="btn" href="register">Sign up</a>
+                    <a class="btn btn-secondary" href="login">Log in</a>
+                </div>
+            </div>
+        </NotAuthorized>
+    </AuthorizeView>
+}
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<SongProgressResponse>? recent;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is null)
+            return;
+
+        var name = (await AuthState).User.Identity?.Name;
+        if (string.IsNullOrEmpty(name))
+            return;
+
+        // Songs still in progress first, then the most recently played.
+        var response = await PlayerService.GetProfileAsync(name);
+        if (response.Succeeded && response.Value is not null)
+        {
+            recent = response.Value.Songs
+                .OrderBy(s => s.Status == ProgressStatusDto.InProgress ? 0 : 1)
+                .ThenByDescending(s => s.LastPlayedAt)
+                .Take(6)
+                .ToList();
+        }
+    }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? Q { get; set; }
+
+    private string query = string.Empty;
+    private string? lastQuery;
+    private bool searching;
+    private string? error;
+    private List<SongSearchResultResponse>? results;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The search lives in the URL (?q=...) so the back button returns to the results.
+        if (!string.IsNullOrWhiteSpace(Q) && Q != lastQuery)
+        {
+            query = Q;
+            await SearchAsync(Q);
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return;
+
+        if (trimmed == lastQuery)
+            await SearchAsync(trimmed);
+        else
+            Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("q", trimmed));
+    }
+
+    private async Task SearchAsync(string text)
+    {
+        lastQuery = text;
+        searching = true;
+        error = null;
+        StateHasChanged();
+
+        var response = await SongService.SearchAsync(text);
+
+        searching = false;
+        if (response.Succeeded)
+            results = response.Value ?? [];
+        else
+            error = response.Message;
+    }
+}

@@ -1,0 +1,85 @@
+@page "/players"
+@inject IPlayerService PlayerService
+
+<PageTitle>Players · GuessTheLyrics</PageTitle>
+
+<h1 class="page-title" tabindex="-1">Players</h1>
+<p class="muted">Everyone's progress. Ranked by songs completed, then average best score.</p>
+
+@if (error is not null)
+{
+    <div class="alert-danger">@error</div>
+}
+else if (players is null)
+{
+    <div class="spinner" aria-label="Loading players"></div>
+}
+else if (players.Count == 0)
+{
+    <p class="muted">No players yet. <a href="register">Be the first.</a></p>
+}
+else
+{
+    <div class="card table-card">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th class="num">#</th>
+                    <th>Player</th>
+                    <th class="num">Completed</th>
+                    <th class="num hide-small">Played</th>
+                    <th>Avg. best</th>
+                    <th class="num hide-small">Words found</th>
+                    <th class="hide-small">Last played</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var player in players)
+                {
+                    var isMe = string.Equals(player.Username, me, StringComparison.OrdinalIgnoreCase);
+                    <tr class="@(isMe ? "me" : "")">
+                        <td class="num rank">@player.Rank</td>
+                        <td>
+                            <a class="player-link" href="players/@Uri.EscapeDataString(player.Username)">@player.Username</a>
+                            @if (isMe)
+                            {
+                                <span class="you">you</span>
+                            }
+                        </td>
+                        <td class="num">@player.SongsCompleted</td>
+                        <td class="num hide-small">@player.SongsPlayed</td>
+                        <td>
+                            <div class="score-cell">
+                                <MiniProgress Value="player.AverageBestPercentage" />
+                                <span>@player.AverageBestPercentage%</span>
+                            </div>
+                        </td>
+                        <td class="num hide-small">@player.WordsFound.ToString("N0")</td>
+                        <td class="muted hide-small">@Format.Relative(player.LastPlayedAt)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<PlayerSummaryResponse>? players;
+    private string? error;
+    private string? me;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+            me = (await AuthState).User.Identity?.Name;
+
+        var response = await PlayerService.GetLeaderboardAsync();
+        if (response.Succeeded)
+            players = response.Value ?? [];
+        else
+            error = response.Message;
+    }
+}

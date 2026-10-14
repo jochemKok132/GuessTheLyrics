@@ -1,0 +1,60 @@
+@page "/login"
+@inject IAccountService AccountService
+@inject NavigationManager Navigation
+
+<PageTitle>Log in · GuessTheLyrics</PageTitle>
+
+<div class="auth-card card">
+    <h1 class="page-title" tabindex="-1">Log in</h1>
+    <p class="muted">Welcome back. Your progress is saved to your account.</p>
+
+    @if (error is not null)
+    {
+        <div class="alert-danger">@error</div>
+    }
+
+    <form class="form" @onsubmit="SubmitAsync">
+        <label>
+            <span class="section-label">Username</span>
+            <input @bind="request.Username" @bind:event="oninput" autocomplete="username" autocapitalize="off" />
+        </label>
+        <label>
+            <span class="section-label">Password</span>
+            <input type="password" @bind="request.Password" @bind:event="oninput" autocomplete="current-password" />
+        </label>
+        <button type="submit" class="btn" disabled="@(busy || string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))">
+            @(busy ? "Logging in..." : "Log in")
+        </button>
+    </form>
+
+    <p class="muted small">No account yet? <a href="@($"register{ReturnQuery}")">Create one</a></p>
+</div>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
+    private readonly LoginRequest request = new();
+    private bool busy;
+    private string? error;
+
+    private string ReturnQuery => string.IsNullOrEmpty(ReturnUrl) ? "" : $"?returnUrl={Uri.EscapeDataString(ReturnUrl)}";
+
+    private async Task SubmitAsync()
+    {
+        busy = true;
+        error = null;
+
+        var response = await AccountService.LoginAsync(request);
+
+        busy = false;
+        if (response.Succeeded)
+            Navigation.NavigateTo(SafeReturnUrl(ReturnUrl));
+        else
+            error = response.Message;
+    }
+
+    // Only allow local paths, so the login page can't be used to redirect elsewhere.
+    public static string SafeReturnUrl(string? returnUrl) =>
+        !string.IsNullOrEmpty(returnUrl) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//") ? returnUrl : "/";
+}

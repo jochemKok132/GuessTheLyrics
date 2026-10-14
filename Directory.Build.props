@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- Local builds are recognisable as dev builds; CI passes -p:Version=<tag without v>. -->
+    <Version>0.0.0-dev</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>
