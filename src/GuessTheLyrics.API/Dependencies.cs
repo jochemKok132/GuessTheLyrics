@@ -9,6 +9,7 @@ using GuessTheLyrics.API.Security;
 using GuessTheLyrics.Application.Interfaces;
 using GuessTheLyrics.Shared;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.OpenApi.Models;
 
 namespace GuessTheLyrics.API;
@@ -20,6 +21,7 @@ public static class Dependencies
     public static IServiceCollection RegisterAPI(this IServiceCollection services, IConfiguration configuration)
     {
         services.RegisterControllers();
+        services.RegisterForwardedHeaders();
         services.RegisterExceptionHandling();
         services.RegisterCors(configuration);
         services.RegisterAuthentication(configuration);
@@ -41,6 +43,19 @@ public static class Dependencies
     {
         options.Converters.Add(new JsonStringEnumConverter());
         options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    }
+
+    private static void RegisterForwardedHeaders(this IServiceCollection services)
+    {
+        // In production the API sits behind the host nginx (container port bound to 127.0.0.1 only),
+        // so the real client IP and scheme come from X-Forwarded-For / X-Forwarded-Proto.
+        // Without this, the rate limiter would see every player as the same proxy IP.
+        services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            options.KnownNetworks.Clear();
+            options.KnownProxies.Clear();
+        });
     }
 
     private static void RegisterExceptionHandling(this IServiceCollection services)

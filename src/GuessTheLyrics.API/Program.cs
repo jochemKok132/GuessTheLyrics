@@ -29,6 +29,7 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseForwardedHeaders();
 app.UseCors(GuessTheLyrics.API.Dependencies.FrontendCorsPolicy);
 app.UseHttpsRedirection();
 app.UseAuthentication();

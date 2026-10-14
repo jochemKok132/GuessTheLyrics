@@ -137,9 +137,122 @@ dotnet test GuessTheLyrics.slnx
 
 ## Versioning and CI
 
-- `Directory.Build.props` sets `0.0.0-dev` for local builds; release builds pass `-p:Version=x.y.z` from the Git tag.
-- The version is shown at the bottom of the sidebar and served at `/api/system/version`.
+- The version comes from the Git tag (`v1.2.3`, optionally `v1.2.3-beta.1`); never edit version numbers by hand.
+  `Directory.Build.props` sets `0.0.0-dev` for local builds, release builds pass `-p:Version=1.2.3`.
+- The version is shown at the bottom of the sidebar and served at `/api/system/version` (the updater's health check).
 - `.github/workflows/ci-build-test.yml` restores, builds and tests on every push and pull request to `master`.
+- `.github/workflows/release.yml` runs when a GitHub release is published: it validates the tag, builds and tests
+  with that version (failing tests = no images), then pushes two images to GitHub Container Registry:
+  `ghcr.io/jochemkok132/guessthelyrics-api` and `ghcr.io/jochemkok132/guessthelyrics-ui`, tagged with the version and,
+  unless it is a pre-release, `latest`.
+
+## Releases and automatic updates
+
+### Releasing a new version
+
+1. Merge everything into `master` and make sure CI is green.
+2. On GitHub: *Releases* → *Draft a new release* → new tag `vX.Y.Z` on `master` → *Generate release notes* → *Publish*.
+   Or from the command line: `gh release create v1.2.3 --generate-notes`.
+3. The *Release* workflow builds the images (a few minutes). Within 5 minutes after that the server installs the version.
+
+Drafts and pre-releases (`v1.3.0-beta.1`, "Set as a pre-release") are never installed automatically, but still get an
+image, so you can try one on the server with `update.sh v1.3.0-beta.1`.
+
+### How the server updates itself
+
+The server can't be reached from the internet over SSH, so nothing is pushed to it. Instead a systemd timer runs
+`deploy/update.sh` every 5 minutes, which:
+
+1. asks the GitHub API for the latest release, and stops quietly when that version is already running, when it failed
+   before, or when a version is pinned;
+2. backs up the database (`BACKUP DATABASE` to `/opt/guessthelyrics/backups`);
+3. sets `APP_VERSION` in `.env` and runs `docker compose pull && docker compose up -d`;
+4. waits until `/api/system/version` reports the new version (3 minutes max);
+5. if it doesn't, puts the previous `APP_VERSION` back, restores the database backup, and remembers the failed
+   version (in `state/failed-versions`) so it is not retried every 5 minutes.
+
+The API runs the EF Core migrations at startup, so database changes ship with the release. Backups are kept; clean up
+`/opt/guessthelyrics/backups` now and then.
+
+### Server layout
+
+| Path | What |
+| --- | --- |
+| `/opt/guessthelyrics/docker-compose.yml` | Copy of `deploy/docker-compose.yml`: SQL Server 2022 Express, API, UI (nginx) |
+| `/opt/guessthelyrics/.env` | Secrets and settings, from `deploy/.env.example` (`chmod 600`, never committed) |
+| `/opt/guessthelyrics/update.sh` | The updater |
+| `/opt/guessthelyrics/backups/` | Database backups made before every update |
+| `/opt/guessthelyrics/state/` | `failed-versions`, `pinned`, lock file |
+| `/etc/guessthelyrics/updater.env` | Optional `GITHUB_TOKEN` when the repository is private |
+| `/etc/systemd/system/guessthelyrics-update.{service,timer}` | From `deploy/systemd/` |
+
+Ports (bound to `127.0.0.1` only, the host nginx is the public entrance): **API 5090, UI 5091**. StockFlow uses
+5080/5081 on the same server; check that 5090/5091 are free with `sudo ss -ltnp` and change `API_PORT`/`UI_PORT` in
+`.env` (and the nginx snippet) if not.
+
+Public URLs: `https://jochemkok.nl/guessthelyrics/` (UI) and `https://jochemkok.nl/guessthelyrics/api/` (API). The UI
+image sets its `<base href>` from `BASE_PATH` at startup, and in production calls the API on its own origin and path
+(`wwwroot/appsettings.Production.json`), so no CORS is involved.
+
+### First-time server setup
+
+```bash
+# 1. Tools (Docker is already installed for StockFlow)
+sudo apt install -y jq curl
+
+# 2. App folder with the deploy files from this repo
+sudo mkdir -p /opt/guessthelyrics /etc/guessthelyrics
+sudo cp deploy/docker-compose.yml deploy/update.sh /opt/guessthelyrics/
+sudo cp deploy/.env.example /opt/guessthelyrics/.env
+sudo chmod +x /opt/guessthelyrics/update.sh
+sudo chmod 600 /opt/guessthelyrics/.env
+sudo nano /opt/guessthelyrics/.env        # DB_PASSWORD, JWT_KEY (openssl rand -base64 48), ports
+
+# 3. Only if the repository is private: GitHub token for the release check, and a GHCR login for the images
+sudo cp deploy/updater.env.example /etc/guessthelyrics/updater.env && sudo chmod 600 /etc/guessthelyrics/updater.env
+echo <token-with-read:packages> | sudo docker login ghcr.io -u jochemKok132 --password-stdin
+
+# 4. Updater timer
+sudo cp deploy/systemd/guessthelyrics-update.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now guessthelyrics-update.timer
+
+# 5. Host nginx: include deploy/nginx/guessthelyrics.conf in the jochemkok.nl server block
+sudo cp deploy/nginx/guessthelyrics.conf /etc/nginx/snippets/
+#    add:  include /etc/nginx/snippets/guessthelyrics.conf;   then:
+sudo nginx -t && sudo systemctl reload nginx
+
+# 6. First install (after the first release exists)
+sudo /opt/guessthelyrics/update.sh
+```
+
+With a public repository, make the two packages public once (GitHub → your profile → *Packages* →
+`guessthelyrics-api` / `guessthelyrics-ui` → *Package settings* → *Change visibility*), so the server can pull without a
+login. Changes to `deploy/` files are not copied to the server automatically; copy them again when they change.
+
+### Server commands
+
+| What | Command |
+| --- | --- |
+| Update now (instead of waiting for the timer) | `sudo /opt/guessthelyrics/update.sh` |
+| Updater log | `journalctl -u guessthelyrics-update -n 50` |
+| When does the timer run next | `systemctl list-timers guessthelyrics-update.timer` |
+| App logs | `cd /opt/guessthelyrics && sudo docker compose logs -f api` |
+| Running version | `curl -s http://127.0.0.1:5090/api/system/version` |
+| Roll back / pin a version | `sudo /opt/guessthelyrics/update.sh v1.2.3` |
+| Unpin and follow new releases again | `sudo /opt/guessthelyrics/update.sh latest` |
+| Pause automatic updates | `sudo systemctl stop guessthelyrics-update.timer` (`start` to resume) |
+| Retry a version that failed before | `sudo /opt/guessthelyrics/update.sh latest` |
+
+Rolling back to an older version keeps the current database. If a newer release changed the database in a way the older
+version can't handle, restore the matching backup from `backups/` as well.
+
+### Building the images locally
+
+```bash
+docker build -f src/GuessTheLyrics.API/Dockerfile --build-arg VERSION=1.0.0-local -t guessthelyrics-api .
+docker build -f src/GuessTheLyrics.UI/Dockerfile  --build-arg VERSION=1.0.0-local -t guessthelyrics-ui .
+```
 
 ## Credits
 

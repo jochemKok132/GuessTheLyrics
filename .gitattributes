@@ -3,6 +3,11 @@
 ###############################################################################
 * text=auto
 
+# Deploy files run on Linux: always LF, also when checked out on Windows.
+*.sh text eol=lf
+deploy/** text eol=lf
+src/GuessTheLyrics.UI/docker/** text eol=lf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

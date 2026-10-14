@@ -9,9 +9,11 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 
-// wwwroot/appsettings.json → "ApiBaseUrl"
-var apiBaseUrl = builder.Configuration.GetValue<string>("ApiBaseUrl")
-                 ?? throw new InvalidOperationException("ApiBaseUrl is missing from wwwroot/appsettings.json.");
+// wwwroot/appsettings.json → "ApiBaseUrl". Relative to where the app is served, so an empty value
+// (appsettings.Production.json) means "same origin and path as the UI", e.g. https://jochemkok.nl/guessthelyrics/.
+var apiBaseUrl = new Uri(
+    new Uri(builder.HostEnvironment.BaseAddress),
+    builder.Configuration.GetValue<string>("ApiBaseUrl") ?? string.Empty);
 
 // Auth
 builder.Services.AddAuthorizationCore();
@@ -22,7 +24,7 @@ builder.Services.AddScoped<AuthenticationStateProvider>(sp => sp.GetRequiredServ
 builder.Services.AddScoped<AuthTokenHandler>();
 
 // Every API call goes through the token handler, which adds the bearer token when logged in.
-builder.Services.AddScoped(sp => new HttpClient(sp.GetRequiredService<AuthTokenHandler>()) { BaseAddress = new Uri(apiBaseUrl) });
+builder.Services.AddScoped(sp => new HttpClient(sp.GetRequiredService<AuthTokenHandler>()) { BaseAddress = apiBaseUrl });
 builder.Services.AddScoped<IHttpService, HttpService>();
 
 // Feature services

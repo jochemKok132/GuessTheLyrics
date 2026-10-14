@@ -1,0 +1,92 @@
+name: Release
+
+# Publishing a GitHub release (tag vX.Y.Z on master) builds, tests and pushes the Docker images.
+# The server's updater (deploy/update.sh) picks up the new version within 5 minutes.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      owner: ${{ steps.version.outputs.owner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag and derive version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag '$TAG' must look like v1.2.3 or v1.2.3-beta.1"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # Image names on GHCR must be lowercase.
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore GuessTheLyrics.slnx
+
+      - name: Build
+        run: dotnet build GuessTheLyrics.slnx --configuration Release --no-restore -p:Version=${{ steps.version.outputs.version }}
+
+      # Failing tests mean no images, so nothing gets deployed.
+      - name: Test
+        run: dotnet test GuessTheLyrics.slnx --configuration Release --no-build --verbosity normal
+
+  images:
+    name: Image (${{ matrix.app }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - app: api
+            dockerfile: src/GuessTheLyrics.API/Dockerfile
+          - app: ui
+            dockerfile: src/GuessTheLyrics.UI/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ needs.test.outputs.owner }}/guessthelyrics-${{ matrix.app }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.test.outputs.version }}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: VERSION=${{ needs.test.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
