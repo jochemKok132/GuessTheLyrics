@@ -4,14 +4,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace GuessTheLyrics.API.Controllers;
 
-[ApiController]
 [Route("api/system")]
-public sealed class SystemController : ControllerBase
+public sealed class SystemController : ErrorHandlingController
 {
     [HttpGet("version")]
     public ActionResult<ApiResponse<VersionResponse>> GetVersion() =>
-        Ok(ApiResponse<VersionResponse>.Ok(new VersionResponse
-        {
-            Version = AppVersion.Of(typeof(SystemController).Assembly)
-        }));
+        Handle(() => new VersionResponse { Version = AppVersion.Of(typeof(SystemController).Assembly) });
 }

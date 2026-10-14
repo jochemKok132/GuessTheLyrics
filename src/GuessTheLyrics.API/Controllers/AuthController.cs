@@ -5,21 +5,14 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace GuessTheLyrics.API.Controllers;
 
-[ApiController]
 [Route("api/auth")]
-public sealed class AuthController(IAuthService authService) : ControllerBase
+public sealed class AuthController(IAuthService authService) : ErrorHandlingController
 {
     [HttpPost("register")]
     public async Task<ActionResult<ApiResponse<AuthResponse>>> Register(RegisterRequest request, CancellationToken cancellationToken)
-    {
-        var response = await authService.RegisterAsync(request, cancellationToken);
-        return Ok(ApiResponse<AuthResponse>.Ok(response, "Account created."));
-    }
+        => await HandleAsync(() => authService.RegisterAsync(request, cancellationToken), "Account created.");
 
     [HttpPost("login")]
     public async Task<ActionResult<ApiResponse<AuthResponse>>> Login(LoginRequest request, CancellationToken cancellationToken)
-    {
-        var response = await authService.LoginAsync(request, cancellationToken);
-        return Ok(ApiResponse<AuthResponse>.Ok(response));
-    }
+        => await HandleAsync(() => authService.LoginAsync(request, cancellationToken));
 }

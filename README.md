@@ -149,11 +149,25 @@ log line of that request, so a screenshot of an error is enough to find what hap
      moment) and concurrency conflicts into `ConflictException`.
 3. **The application degrades gracefully:** when LRCLIB is down, a song that was opened before is still served from the
    puzzle cache (also after its 30-minute lifetime), so players already in a game can keep playing and saving.
-4. **`ApiError.FromException`** (`API/Handlers/ApiError.cs`) is the one mapping table from exception to status, error
-   code, player message, log level and `Retry-After`. `GlobalExceptionHandler` applies it, writes the envelope and logs:
+4. **`ErrorHandlingController`** (`API/Controllers/ErrorHandlingController.cs`) is the base class of every controller.
+   Each action is one line that hands the service call to `HandleAsync(...)` / `Handle(...)`:
+
+   ```csharp
+   [HttpGet("search")]
+   public async Task<ActionResult<ApiResponse<IReadOnlyList<SongSearchResultResponse>>>> Search(
+       [FromQuery] SongSearchRequest request, CancellationToken cancellationToken)
+       => await HandleAsync(() => songService.SearchAsync(request, cancellationToken));
+   ```
+
+   On success it returns `ApiResponse.Ok(value)`; on any exception it returns the error response instead of letting
+   the exception escape. Because the exception is caught in our own code, Visual Studio no longer stops on expected
+   failures (like LRCLIB being down) as "user-unhandled", and the request always ends normally.
+5. **`ApiError.FromException`** (`API/Handlers/ApiError.cs`) is the one mapping table from exception to status, error
+   code, player message, log level and `Retry-After`. `ErrorHandlingController` applies it for controllers and
+   `GlobalExceptionHandler` for everything outside them (middleware, auth, model binding); both log the same way:
    4xx at Information without a stack trace, temporary problems at Warning, real bugs at Error with the full exception.
    Unknown exceptions never leak their message (it may contain internals); the player gets a generic text + trace id.
-5. **Errors without an exception** use the envelope too: unknown routes / wrong method / 415 (`UseApiStatusCodePages`),
+6. **Errors without an exception** use the envelope too: unknown routes / wrong method / 415 (`UseApiStatusCodePages`),
    invalid JSON or wrong types in a request body (`InvalidModelStateResponseFactory`), 401/403 from JWT (expired token
    gets its own message) and 429 from the rate limiter (with `Retry-After`).
 
@@ -183,11 +197,8 @@ log line of that request, so a screenshot of an error is enough to find what hap
   "Try again", and navigating elsewhere resets it.
 - While playing, a failed save shows "Not saved: ..." and is retried automatically on the next 10-second autosave.
 
-> **Visual Studio stops on handled exceptions.** When the debugger is attached, Visual Studio breaks on exceptions such
-> as `LyricsServiceException` because they leave your code before the error handler catches them ("user-unhandled").
-> The API still answers correctly: press *Continue* (F5), or untick *Break when this exception type is user-unhandled*
-> in the exception popup for the expected types (`LyricsServiceException`, `ConflictException`, `KeyNotFoundException`,
-> `ArgumentException`, `AuthenticationException`).
+> **Debugging:** controller errors are caught in `ErrorHandlingController`, so Visual Studio doesn't pause on them.
+> If you want to see where an exception is thrown, enable it under *Debug → Windows → Exception Settings*.
 
 ## Running locally
 
