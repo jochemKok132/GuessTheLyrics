@@ -251,6 +251,14 @@ dotnet ef migrations add <Name> --project src/GuessTheLyrics.Infrastructure --st
 
 Reset the local database: `dotnet ef database drop --project src/GuessTheLyrics.Infrastructure --startup-project src/GuessTheLyrics.API`.
 
+### Links under a sub-path
+
+In production the UI is served under `/guessthelyrics/` (the `<base href>` is set at container start). So every link
+and `NavigationManager.NavigateTo` in the UI uses a path **without** a leading slash (`play/123`, `match/ABC123`,
+`multiplayer`): those resolve against the base href. A leading slash (`/play/123`) points at the domain root and would
+leave the app. The `returnUrl` of login and sign-up is stored as `/play/123`; `Login.SafeReturnUrl` checks that it is
+a local path and strips the slash before navigating.
+
 ## Tests
 
 ```bash

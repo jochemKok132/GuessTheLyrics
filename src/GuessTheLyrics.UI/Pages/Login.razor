@@ -54,7 +54,11 @@
             error = UiError.From(response);
     }
 
-    // Only allow local paths, so the login page can't be used to redirect elsewhere.
+    // Only allow local paths, so the login page can't be used to redirect elsewhere. returnUrl is app-relative
+    // ("/play/123"); the leading slash is dropped so NavigateTo resolves it against the base href. Otherwise
+    // "/play/123" would go to the domain root (jochemkok.nl/play/123) when the app is served under /guessthelyrics/.
     public static string SafeReturnUrl(string? returnUrl) =>
-        !string.IsNullOrEmpty(returnUrl) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//") ? returnUrl : "/";
+        !string.IsNullOrEmpty(returnUrl) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//") && !returnUrl.Contains('\\')
+            ? returnUrl.TrimStart('/')
+            : string.Empty;
 }
