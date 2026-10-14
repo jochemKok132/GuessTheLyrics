@@ -32,5 +32,6 @@ builder.Services.AddScoped<ISongService, SongService>();
 builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<IProgressService, ProgressService>();
 builder.Services.AddScoped<IPlayerService, PlayerService>();
+builder.Services.AddScoped<IMatchClient, MatchClient>();
 
 await builder.Build().RunAsync();

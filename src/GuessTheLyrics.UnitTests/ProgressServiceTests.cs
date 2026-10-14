@@ -31,6 +31,7 @@ public class ProgressServiceTests
                 Artist = "Artist",
                 TotalWords = LyricsTokenizer.CountWords(lines),
                 UniqueWords = LyricsTokenizer.CountUniqueWords(lines),
+                TimeLimitSeconds = 60,
                 Lines = lines
             });
 
@@ -181,5 +182,38 @@ public class ProgressServiceTests
         var result = await _sut.GetSongPlayersAsync(SongId);
 
         Assert.Equal(new[] { "fast", "slow", "half" }, result.Select(p => p.Username));
+    }
+
+    [Fact]
+    public async Task SaveAsync_TimeRanOut_IsTimeUpAndCountsAsAttempt()
+    {
+        SetupExisting(Existing(ProgressStatus.InProgress));
+
+        var result = await _sut.SaveAsync(_userId, SongId, new SaveProgressRequest { FoundKeys = ["hey"], ElapsedSeconds = 60 });
+
+        Assert.Equal(ProgressStatusDto.TimeUp, result.Status);
+        Assert.Equal(1, result.Attempts);
+        Assert.Null(result.BestTimeSeconds);
+    }
+
+    [Fact]
+    public async Task SaveAsync_AllWordsButLongAfterTheLimit_IsTimeUpNotCompleted()
+    {
+        SetupExisting(null);
+
+        var result = await _sut.SaveAsync(_userId, SongId, new SaveProgressRequest { FoundKeys = ["na", "hey"], ElapsedSeconds = 300 });
+
+        Assert.Equal(ProgressStatusDto.TimeUp, result.Status);
+        Assert.Null(result.BestTimeSeconds);
+    }
+
+    [Fact]
+    public async Task SaveAsync_AllWordsJustWithinGrace_IsCompleted()
+    {
+        SetupExisting(null);
+
+        var result = await _sut.SaveAsync(_userId, SongId, new SaveProgressRequest { FoundKeys = ["na", "hey"], ElapsedSeconds = 62 });
+
+        Assert.Equal(ProgressStatusDto.Completed, result.Status);
     }
 }

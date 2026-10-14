@@ -4,6 +4,7 @@ using GuessTheLyrics.Application.Validation;
 using GuessTheLyrics.Domain.Entities;
 using GuessTheLyrics.Domain.Enums;
 using GuessTheLyrics.Domain.Interfaces;
+using GuessTheLyrics.Shared.Game;
 using GuessTheLyrics.Shared.Progress;
 using GuessTheLyrics.Shared.Songs;
 
@@ -33,9 +34,16 @@ public sealed class ProgressService(ISongProgressRepository progressRepository, 
             .ToList();
         var foundWordCount = foundKeys.Sum(k => wordCounts[k]);
 
-        var status = foundKeys.Count == wordCounts.Count && wordCounts.Count > 0
+        // Completed only counts within the countdown (plus a little grace for network delay).
+        var allFound = foundKeys.Count == wordCounts.Count && wordCounts.Count > 0;
+        var outOfTime = request.ElapsedSeconds >= puzzle.TimeLimitSeconds;
+        var requested = request.Status.ToDomain();
+
+        var status = allFound && request.ElapsedSeconds <= puzzle.TimeLimitSeconds + TimeLimits.GraceSeconds
             ? ProgressStatus.Completed
-            : request.Status.ToDomain() == ProgressStatus.GaveUp ? ProgressStatus.GaveUp : ProgressStatus.InProgress;
+            : requested == ProgressStatus.GaveUp ? ProgressStatus.GaveUp
+            : requested == ProgressStatus.TimeUp || outOfTime || allFound ? ProgressStatus.TimeUp
+            : ProgressStatus.InProgress;
 
         var progress = await progressRepository.GetAsync(userId, songId, cancellationToken);
         var isNew = progress is null;

@@ -10,7 +10,7 @@
 
     @if (error is not null)
     {
-        <div class="alert-danger">@error</div>
+        <ErrorMessage Error="error" OnRetry="SubmitAsync" />
     }
 
     <form class="form" @onsubmit="SubmitAsync">
@@ -36,7 +36,7 @@
 
     private readonly LoginRequest request = new();
     private bool busy;
-    private string? error;
+    private UiError? error;
 
     private string ReturnQuery => string.IsNullOrEmpty(ReturnUrl) ? "" : $"?returnUrl={Uri.EscapeDataString(ReturnUrl)}";
 
@@ -51,7 +51,7 @@
         if (response.Succeeded)
             Navigation.NavigateTo(SafeReturnUrl(ReturnUrl));
         else
-            error = response.Message;
+            error = UiError.From(response);
     }
 
     // Only allow local paths, so the login page can't be used to redirect elsewhere.

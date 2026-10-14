@@ -2,6 +2,7 @@ using System.Security.Authentication;
 using GuessTheLyrics.Application.Interfaces;
 using GuessTheLyrics.Application.Services;
 using GuessTheLyrics.Domain.Entities;
+using GuessTheLyrics.Domain.Exceptions;
 using GuessTheLyrics.Domain.Interfaces;
 using GuessTheLyrics.Shared.Auth;
 using Moq;
@@ -49,13 +50,25 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RegisterAsync_UsernameTaken_ThrowsArgumentException()
+    public async Task RegisterAsync_UsernameTaken_ThrowsConflictException()
     {
         _userRepository.Setup(r => r.ExistsAsync("JOCHEM", It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
         var request = new RegisterRequest { Username = "jochem", Password = "password123" };
 
-        await Assert.ThrowsAsync<ArgumentException>(() => _sut.RegisterAsync(request));
+        await Assert.ThrowsAsync<ConflictException>(() => _sut.RegisterAsync(request));
+    }
+
+    [Fact]
+    public async Task RegisterAsync_SameNameRegisteredAtTheSameTime_ThrowsConflictWithUsernameMessage()
+    {
+        _userRepository.Setup(r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ConflictException("This already exists."));
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            _sut.RegisterAsync(new RegisterRequest { Username = "jochem", Password = "password123" }));
+
+        Assert.Equal("That username is already taken.", exception.Message);
     }
 
     [Fact]

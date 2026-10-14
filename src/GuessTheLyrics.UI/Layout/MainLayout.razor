@@ -1,6 +1,8 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 @inject IAccountService AccountService
 @inject NavigationManager Navigation
+@inject ILogger<MainLayout> Logger
 
 <div class="ml-page">
     <aside class="ml-sidebar">
@@ -12,6 +14,7 @@
         <nav class="ml-nav">
             <span class="section-label">Play</span>
             <NavLink class="ml-nav-link" href="" Match="NavLinkMatch.All">Search a song</NavLink>
+            <NavLink class="ml-nav-link" href="multiplayer">Multiplayer</NavLink>
             <NavLink class="ml-nav-link" href="players" Match="NavLinkMatch.All">Players</NavLink>
             <AuthorizeView>
                 <Authorized>
@@ -44,6 +47,7 @@
             <span class="section-label">How to play</span>
             <p>Pick a song and type every word you remember. A correct word is revealed everywhere it appears and the box clears, so just keep typing.</p>
             <p>Short words like "a" wait while a longer hidden word starts the same way; press space to enter them.</p>
+            <p>The clock counts down: 3 seconds per different word in the song.</p>
         </div>
 
         <footer class="sidebar-footer">
@@ -53,12 +57,48 @@
     </aside>
 
     <main class="ml-main-content">
-        @Body
+        @* Catches crashes inside a page, so the rest of the app (sidebar, navigation) keeps working. *@
+        <ErrorBoundary @ref="errorBoundary">
+            <ChildContent>
+                @Body
+            </ChildContent>
+            <ErrorContent Context="exception">
+                <div class="card crash-card" role="alert">
+                    <h1 class="page-title">Something went wrong on this page</h1>
+                    <p class="muted">The error has been written to the browser console. Your saved progress is safe.</p>
+                    <div class="account-actions">
+                        <button class="btn" @onclick="Recover">Try again</button>
+                        <a class="btn btn-secondary" href="" @onclick="Recover">Back to search</a>
+                    </div>
+                </div>
+                @{ LogCrash(exception); }
+            </ErrorContent>
+        </ErrorBoundary>
     </main>
 </div>
 
 @code {
     private static readonly string version = AppVersion.Of(typeof(MainLayout).Assembly);
+
+    private ErrorBoundary? errorBoundary;
+    private Exception? loggedCrash;
+
+    protected override void OnInitialized() => Navigation.LocationChanged += OnLocationChanged;
+
+    // Going to another page clears a crash, so one broken page doesn't block the whole app.
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => errorBoundary?.Recover();
+
+    private void Recover() => errorBoundary?.Recover();
+
+    private void LogCrash(Exception exception)
+    {
+        if (ReferenceEquals(exception, loggedCrash))
+            return;
+        loggedCrash = exception;
+        Logger.LogError(exception, "A page crashed");
+    }
+
+    public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
 
     private static string Initial(string? name) =>
         string.IsNullOrEmpty(name) ? "?" : name[..1].ToUpperInvariant();

@@ -1,0 +1,563 @@
+@page "/match/{Code}"
+@implements IDisposable
+@inject IMatchClient MatchClient
+@inject ISongService SongService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>@(match is null ? "Match" : $"Match {match.Code} · {match.Title}")</PageTitle>
+
+<AuthorizeView>
+    <NotAuthorized>
+        <h1 class="page-title" tabindex="-1">Match @Code.ToUpperInvariant()</h1>
+        <div class="alert-info">
+            <a href="@($"login?returnUrl={Uri.EscapeDataString($"/match/{Code}")}")">Log in</a> or
+            <a href="@($"register?returnUrl={Uri.EscapeDataString($"/match/{Code}")}")">sign up</a> to join this match.
+        </div>
+    </NotAuthorized>
+    <Authorized>
+        @if (match is null)
+        {
+            if (error is not null)
+            {
+                <h1 class="page-title" tabindex="-1">Match @Code.ToUpperInvariant()</h1>
+                <ErrorMessage Error="error" OnRetry="LoadAsync" />
+                <p><a href="multiplayer">Back to multiplayer</a></p>
+            }
+            else
+            {
+                <div class="spinner" aria-label="Loading match"></div>
+            }
+        }
+        else
+        {
+            <div class="play-header">
+                <div>
+                    <h1 class="page-title" tabindex="-1">@match.Title</h1>
+                    <p class="muted">
+                        @match.Artist · @match.TotalWords words (@match.UniqueWords different) · @Format.Seconds(match.TimeLimitSeconds) to play
+                    </p>
+                </div>
+                <div class="header-actions">
+                    <span class="match-code" title="Match code">@match.Code</span>
+                    @if (match.YouAreIn && Status is MatchStatusDto.Lobby or MatchStatusDto.Countdown or MatchStatusDto.Playing)
+                    {
+                        <button class="btn btn-secondary" @onclick="LeaveAsync" disabled="@busy">
+                            @(Status == MatchStatusDto.Lobby ? "Leave" : "Give up")
+                        </button>
+                    }
+                    else
+                    {
+                        <a class="btn btn-secondary" href="multiplayer">Multiplayer</a>
+                    }
+                </div>
+            </div>
+
+            <ErrorMessage Error="error" OnRetry="LoadAsync" />
+
+            @switch (Status)
+            {
+                case MatchStatusDto.Lobby:
+                    <div class="lobby card">
+                        <div class="lobby-share">
+                            <span class="section-label">Invite players</span>
+                            <p>Share the code <strong class="match-code big">@match.Code</strong> or the link:</p>
+                            <div class="share-row">
+                                <input readonly value="@ShareUrl" aria-label="Match link" class="share-input" />
+                                <button class="btn btn-secondary btn-small" @onclick="CopyLinkAsync">@(copied ? "Copied!" : "Copy link")</button>
+                            </div>
+                        </div>
+
+                        <div class="lobby-players">
+                            <span class="section-label">Players (@match.Players.Count / @match.MaxPlayers)</span>
+                            <ul class="lobby-list">
+                                @foreach (var player in match.Players)
+                                {
+                                    <li class="@(player.IsYou ? "me" : "")">
+                                        <span class="avatar">@player.Username[..1].ToUpperInvariant()</span>
+                                        <span>@player.Username</span>
+                                        @if (player.IsHost) { <span class="badge badge-accent">host</span> }
+                                        @if (player.IsYou) { <span class="you">you</span> }
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+
+                        <div class="lobby-actions">
+                            @if (match.YouAreHost)
+                            {
+                                <button class="btn" @onclick="StartAsync" disabled="@busy">Start match</button>
+                                <span class="muted small">
+                                    @(match.Players.Count < 2 ? "You can start alone, but it's more fun with others." : "Everyone gets a 5 second countdown.")
+                                </span>
+                            }
+                            else if (match.YouAreIn)
+                            {
+                                <span class="muted">Waiting for @match.HostUsername to start the match...</span>
+                            }
+                            else if (match.CanJoin)
+                            {
+                                <button class="btn" @onclick="JoinAsync" disabled="@busy">Join match</button>
+                            }
+                        </div>
+                    </div>
+                    break;
+
+                default:
+                    if (Status == MatchStatusDto.Countdown)
+                    {
+                        <div class="countdown" aria-live="assertive">
+                            <span class="countdown-label">Get ready</span>
+                            <span class="countdown-number">@CountdownSeconds</span>
+                        </div>
+                    }
+
+                    if (Status == MatchStatusDto.Finished)
+                    {
+                        <div class="@(IWon ? "alert-success" : "alert-info") result-banner">
+                            @if (match.WinnerUsername is null)
+                            {
+                                <span>Nobody found a word. It's a draw!</span>
+                            }
+                            else if (IWon)
+                            {
+                                <span>🏆 You win!</span>
+                            }
+                            else
+                            {
+                                <span>🏆 @match.WinnerUsername wins!</span>
+                            }
+                            @if (Me is not null)
+                            {
+                                <span class="muted"> You finished #@Me.Rank with @Me.FoundWordCount of @match.TotalWords words (@Me.Percentage%).</span>
+                            }
+                        </div>
+                    }
+
+                    if (match.YouAreIn && game is not null)
+                    {
+                        <div class="game-bar card">
+                            <div class="stat">
+                                <span class="section-label">Words</span>
+                                <span class="stat-value">@game.FoundWordCount<span class="stat-total"> / @match.TotalWords</span></span>
+                            </div>
+                            <div class="stat">
+                                <span class="section-label">Rank</span>
+                                <span class="stat-value">#@(Me?.Rank ?? 0)<span class="stat-total"> / @match.Players.Count</span></span>
+                            </div>
+                            <TimeLeft Remaining="Remaining" Limit="TimeSpan.FromSeconds(match.TimeLimitSeconds)" />
+
+                            <div class="guess-wrap">
+                                <input @ref="guessInput"
+                                       class="guess-input"
+                                       @bind="guess"
+                                       @bind:event="oninput"
+                                       @bind:after="CheckGuess"
+                                       @onkeydown="SubmitGuess"
+                                       disabled="@(!CanType)"
+                                       placeholder="@(CanType ? "Type any word from the song..." : Status == MatchStatusDto.Countdown ? "Get ready..." : "Match over")"
+                                       aria-label="Type a word"
+                                       autocomplete="off"
+                                       autocapitalize="off"
+                                       autocorrect="off"
+                                       spellcheck="false" />
+                                <div class="guess-status">
+                                    <span class="guess-feedback" aria-live="polite">@game.Feedback</span>
+                                    <span class="save-state">@SyncLabel</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="progress" role="progressbar" aria-valuenow="@game.Percentage" aria-valuemin="0" aria-valuemax="100">
+                            <div class="progress-fill @(game.AllFound ? "complete" : "")" style="width: @(game.Percentage)%"></div>
+                        </div>
+                    }
+                    else if (!match.YouAreIn)
+                    {
+                        <div class="alert-info">You're watching this match. Start your own from <a href="multiplayer">Multiplayer</a>.</div>
+                    }
+
+                    <div class="play-layout">
+                        @if (game is not null && match.YouAreIn)
+                        {
+                            <LyricsBoard Game="game" RevealMissed="@(Status == MatchStatusDto.Finished)" />
+                        }
+                        else
+                        {
+                            <div class="lyrics card muted">The lyrics are only shown to players in the match.</div>
+                        }
+
+                        <aside class="side-panel card">
+                            <div class="side-head">
+                                <span class="section-label">Scoreboard</span>
+                                <span class="muted small">@(Status == MatchStatusDto.Finished ? "final" : "live")</span>
+                            </div>
+                            <ol class="player-list">
+                                @foreach (var player in match.Players)
+                                {
+                                    <li class="player-row @(player.IsYou ? "me" : "") @(player.Left ? "left" : "")">
+                                        <div class="player-row-top">
+                                            <span class="rank-badge">@player.Rank</span>
+                                            <span class="player-name">@player.Username</span>
+                                            @if (player.IsYou) { <span class="you">you</span> }
+                                            <span class="player-score">@player.Percentage%</span>
+                                        </div>
+                                        <MiniProgress Value="player.Percentage" Complete="player.Finished" />
+                                        <div class="player-row-meta muted">
+                                            <span>@player.FoundWordCount words</span>
+                                            @if (player.Finished)
+                                            {
+                                                <span>✓ @Format.Seconds(player.FinishedAfterSeconds)</span>
+                                            }
+                                            else if (player.Left)
+                                            {
+                                                <span>gave up</span>
+                                            }
+                                        </div>
+                                    </li>
+                                }
+                            </ol>
+
+                            @if (Status == MatchStatusDto.Finished)
+                            {
+                                <div class="side-actions">
+                                    <button class="btn btn-small" @onclick="RematchAsync" disabled="@busy">New match, same song</button>
+                                    <a class="btn btn-secondary btn-small" href="play/@match.SongId">Practice solo</a>
+                                </div>
+                            }
+                        </aside>
+                    </div>
+                    break;
+            }
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter]
+    public string Code { get; set; } = string.Empty;
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private MatchResponse? match;
+    private GuessGame? game;
+    private UiError? error;
+    private bool busy;
+    private bool copied;
+
+    private string guess = string.Empty;
+    private ElementReference guessInput;
+    private bool focusPending;
+
+    // Server clock minus local clock, so countdowns are right even when this computer's clock is off.
+    private TimeSpan clockOffset;
+
+    private Timer? poll;
+    private bool polling;
+    private bool sending;
+    private bool sendQueued;
+    private DateTime lastSync = DateTime.MinValue;
+    private string? syncError;
+    private bool disposed;
+    private bool loggedIn;
+
+    private DateTime Now => DateTime.UtcNow + clockOffset;
+
+    /// <summary>The server's status, moved forward locally the moment the countdown or the time runs out.</summary>
+    private MatchStatusDto Status
+    {
+        get
+        {
+            if (match is null)
+                return MatchStatusDto.Lobby;
+
+            if (match.Status == MatchStatusDto.Countdown && match.StartsAt <= Now)
+                return MatchStatusDto.Playing;
+
+            if (match.Status == MatchStatusDto.Playing && match.EndsAt <= Now)
+                return MatchStatusDto.Finished;
+
+            return match.Status;
+        }
+    }
+
+    private MatchPlayerResponse? Me => match?.Players.FirstOrDefault(p => p.IsYou);
+
+    private bool IWon => match?.WinnerUsername is not null && Me is not null && Me.Rank == 1 && !Me.Left;
+
+    private bool CanType => Status == MatchStatusDto.Playing && game is not null && !game.AllFound && Me is { Left: false };
+
+    private int CountdownSeconds => match?.StartsAt is { } start ? Math.Max(1, (int)Math.Ceiling((start - Now).TotalSeconds)) : 0;
+
+    private TimeSpan Remaining
+    {
+        get
+        {
+            if (match is null)
+                return TimeSpan.Zero;
+            if (match.StartsAt is null || Status == MatchStatusDto.Countdown)
+                return TimeSpan.FromSeconds(match.TimeLimitSeconds);
+            // A match that ended early keeps showing the time that was left at that moment.
+            var until = match.FinishedAt is { } finished && finished < Now ? finished : Now;
+            var left = (match.EndsAt ?? until) - until;
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+    }
+
+    private string ShareUrl => Navigation.ToAbsoluteUri($"match/{match?.Code}").ToString();
+
+    private string SyncLabel => syncError is not null ? $"Not synced: {syncError}" : sending ? "Syncing..." : "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        loggedIn = AuthState is not null && (await AuthState).User.Identity?.IsAuthenticated == true;
+        if (!loggedIn)
+            return;
+
+        await LoadAsync();
+
+        // Poll the scoreboard; the server is the referee for time and ranking.
+        poll = new Timer(_ => InvokeAsync(PollAsync), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private async Task LoadAsync()
+    {
+        error = null;
+        var response = await MatchClient.GetAsync(Code);
+        if (!response.Succeeded || response.Value is null)
+        {
+            error = UiError.From(response);
+            return;
+        }
+
+        // Opening a shared link joins you automatically while the match is still in the lobby.
+        if (response.Value.CanJoin)
+            response = await MatchClient.JoinAsync(Code);
+
+        if (response.Succeeded && response.Value is not null)
+            Apply(response.Value);
+        else
+            error = UiError.From(response);
+
+        if (match is not null && game is null)
+            await LoadLyricsAsync();
+    }
+
+    private async Task LoadLyricsAsync()
+    {
+        var response = await SongService.GetPuzzleAsync(match!.SongId);
+        if (!response.Succeeded || response.Value is null)
+        {
+            error = UiError.From(response);
+            return;
+        }
+
+        game = new GuessGame(response.Value);
+        game.Restore(match.YourFoundKeys ?? []);
+        focusPending = true;
+    }
+
+    private async Task PollAsync()
+    {
+        if (disposed || polling || match is null)
+            return;
+
+        // Finished matches don't change any more (one last refresh catches late words).
+        if (match.Status == MatchStatusDto.Finished && DateTime.UtcNow - lastSync > TimeSpan.FromSeconds(3))
+        {
+            StateHasChanged();
+            return;
+        }
+
+        polling = true;
+        try
+        {
+            // A progress send just returned the board; no need to ask again right away.
+            if (DateTime.UtcNow - lastSync >= TimeSpan.FromMilliseconds(900))
+            {
+                var response = await MatchClient.GetAsync(match.Code);
+                if (response.Succeeded && response.Value is not null)
+                {
+                    Apply(response.Value);
+                    error = null;
+                }
+                else if (response.ErrorCode == ErrorCodes.NotFound)
+                {
+                    error = UiError.From(response); // match expired or the API restarted
+                }
+            }
+        }
+        finally
+        {
+            polling = false;
+        }
+
+        if (!disposed)
+            StateHasChanged();
+    }
+
+    private void Apply(MatchResponse response)
+    {
+        var wasPlaying = Status == MatchStatusDto.Playing;
+        match = response;
+        clockOffset = response.ServerTime - DateTime.UtcNow;
+        lastSync = DateTime.UtcNow;
+
+        if (!wasPlaying && Status is MatchStatusDto.Countdown or MatchStatusDto.Playing)
+            focusPending = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // During the countdown the input is disabled; focus it the moment typing is possible.
+        if (focusPending && CanType)
+        {
+            focusPending = false;
+            try
+            {
+                await guessInput.FocusAsync();
+            }
+            catch (InvalidOperationException)
+            {
+                focusPending = true;
+            }
+        }
+    }
+
+    // ---------- Typing ----------
+
+    private void CheckGuess()
+    {
+        if (game is null || !CanType)
+            return;
+
+        var result = game.Guess(guess);
+        guess = result.Input;
+
+        if (result.Accepted)
+            _ = SendProgressAsync();
+    }
+
+    private void SubmitGuess(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            guess += " ";
+            CheckGuess();
+        }
+    }
+
+    /// <summary>Sends found words right away; one request at a time, the latest words always get sent.</summary>
+    private async Task SendProgressAsync()
+    {
+        if (match is null || game is null)
+            return;
+
+        if (sending)
+        {
+            sendQueued = true;
+            return;
+        }
+
+        sending = true;
+        do
+        {
+            sendQueued = false;
+            var response = await MatchClient.SubmitProgressAsync(match.Code, game.Found);
+
+            if (response.Succeeded && response.Value is not null)
+            {
+                Apply(response.Value);
+                syncError = null;
+            }
+            else
+            {
+                syncError = response.Message;
+                // Found words are kept locally and sent again with the next word or poll cycle.
+                if (ErrorCodes.IsRetryable(response.ErrorCode))
+                {
+                    await Task.Delay(1000);
+                    sendQueued = !disposed;
+                }
+            }
+        }
+        while (sendQueued && !disposed);
+        sending = false;
+
+        if (!disposed)
+            StateHasChanged();
+    }
+
+    // ---------- Lobby actions ----------
+
+    private async Task JoinAsync() => await RunAsync(() => MatchClient.JoinAsync(Code));
+
+    private async Task StartAsync() => await RunAsync(() => MatchClient.StartAsync(match!.Code));
+
+    private async Task LeaveAsync()
+    {
+        // Leaving the lobby goes back to the list; giving up during the race keeps you here to see the result.
+        var wasLobby = Status == MatchStatusDto.Lobby;
+        await RunAsync(() => MatchClient.LeaveAsync(match!.Code));
+        if (error is null && wasLobby)
+            Navigation.NavigateTo("multiplayer");
+    }
+
+    private async Task RematchAsync()
+    {
+        busy = true;
+        var response = await MatchClient.CreateAsync(match!.SongId);
+        busy = false;
+
+        if (response.Succeeded && response.Value is not null)
+            Navigation.NavigateTo($"match/{response.Value.Code}", forceLoad: false);
+        else
+            error = UiError.From(response);
+    }
+
+    private async Task RunAsync(Func<Task<ApiResponse<MatchResponse>>> action)
+    {
+        busy = true;
+        error = null;
+        var response = await action();
+        busy = false;
+
+        if (response.Succeeded && response.Value is not null)
+            Apply(response.Value);
+        else
+            error = UiError.From(response);
+    }
+
+    private async Task CopyLinkAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", ShareUrl);
+            copied = true;
+        }
+        catch (JSException)
+        {
+            // Clipboard blocked (e.g. no HTTPS): the link is in the box to copy by hand.
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // "New match, same song" navigates to another code on this same page component.
+        if (match is not null && !string.Equals(match.Code, Code, StringComparison.OrdinalIgnoreCase))
+        {
+            match = null;
+            game = null;
+            guess = string.Empty;
+            syncError = null;
+            await LoadAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        poll?.Dispose();
+    }
+}

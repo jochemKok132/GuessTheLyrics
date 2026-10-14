@@ -6,7 +6,7 @@
 @if (error is not null)
 {
     <h1 class="page-title" tabindex="-1">@Username</h1>
-    <div class="alert-danger">@error</div>
+    <ErrorMessage Error="error" OnRetry="LoadAsync" />
     <p><a href="players">Back to players</a></p>
 }
 else if (profile is null)
@@ -117,11 +117,12 @@ else
         (null, "All"),
         (ProgressStatusDto.InProgress, "Playing"),
         (ProgressStatusDto.Completed, "Completed"),
-        (ProgressStatusDto.GaveUp, "Gave up")
+        (ProgressStatusDto.GaveUp, "Gave up"),
+        (ProgressStatusDto.TimeUp, "Time's up")
     ];
 
     private PlayerProfileResponse? profile;
-    private string? error;
+    private UiError? error;
     private string? me;
     private string? loadedFor;
     private ProgressStatusDto? filter;
@@ -143,14 +144,19 @@ else
             return;
 
         loadedFor = Username;
+        filter = null;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
         profile = null;
         error = null;
-        filter = null;
 
         var response = await PlayerService.GetProfileAsync(Username);
         if (response.Succeeded)
             profile = response.Value;
         else
-            error = response.Message;
+            error = UiError.From(response);
     }
 }

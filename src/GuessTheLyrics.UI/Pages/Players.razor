@@ -8,7 +8,7 @@
 
 @if (error is not null)
 {
-    <div class="alert-danger">@error</div>
+    <ErrorMessage Error="error" OnRetry="LoadAsync" />
 }
 else if (players is null)
 {
@@ -68,7 +68,7 @@ else
     private Task<AuthenticationState>? AuthState { get; set; }
 
     private List<PlayerSummaryResponse>? players;
-    private string? error;
+    private UiError? error;
     private string? me;
 
     protected override async Task OnInitializedAsync()
@@ -76,10 +76,16 @@ else
         if (AuthState is not null)
             me = (await AuthState).User.Identity?.Name;
 
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        error = null;
         var response = await PlayerService.GetLeaderboardAsync();
         if (response.Succeeded)
             players = response.Value ?? [];
         else
-            error = response.Message;
+            error = UiError.From(response);
     }
 }

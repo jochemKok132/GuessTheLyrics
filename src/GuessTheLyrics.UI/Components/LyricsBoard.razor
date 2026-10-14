@@ -1,0 +1,55 @@
+@* The lyrics as verses of hidden/found words. Used by solo play and multiplayer. *@
+
+<div class="lyrics card">
+    @foreach (var verse in Game.Verses)
+    {
+        var verseFound = verse.Keys.Count(Game.Found.Contains);
+        var verseDone = verseFound == verse.Keys.Count && verse.Keys.Count > 0;
+
+        <section class="verse @(verseDone ? "complete" : "")">
+            <div class="verse-head">
+                <span>@verse.Label</span>
+                @if (verse.Keys.Count > 0)
+                {
+                    <span class="verse-count">@(verseDone ? "✓" : $"{verseFound}/{verse.Keys.Count}")</span>
+                }
+            </div>
+
+            @foreach (var line in verse.Lines)
+            {
+                <div class="lyric-line">
+                    @foreach (var token in line.Tokens)
+                    {
+                        if (token.Key is null)
+                        {
+                            <span class="sep">@token.Text</span>
+                        }
+                        else if (Game.Found.Contains(token.Key))
+                        {
+                            <span class="word found @(token.Key == Game.LastFound ? "just-found" : "")">@token.Text</span>
+                        }
+                        else if (RevealMissed)
+                        {
+                            <span class="word missed">@token.Text</span>
+                        }
+                        else
+                        {
+                            <span class="word hidden" style="width: @(HiddenWidth(token.Text))px"></span>
+                        }
+                    }
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public GuessGame Game { get; set; } = default!;
+
+    /// <summary>Show the words that weren't found in red (game over).</summary>
+    [Parameter]
+    public bool RevealMissed { get; set; }
+
+    private static int HiddenWidth(string word) => Math.Clamp(word.Length * 9 + 4, 14, 220);
+}

@@ -57,6 +57,7 @@ public static class ProgressMappings
         ProgressStatus.InProgress => ProgressStatusDto.InProgress,
         ProgressStatus.Completed => ProgressStatusDto.Completed,
         ProgressStatus.GaveUp => ProgressStatusDto.GaveUp,
+        ProgressStatus.TimeUp => ProgressStatusDto.TimeUp,
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown progress status.")
     };
 
@@ -65,6 +66,7 @@ public static class ProgressMappings
         ProgressStatusDto.InProgress => ProgressStatus.InProgress,
         ProgressStatusDto.Completed => ProgressStatus.Completed,
         ProgressStatusDto.GaveUp => ProgressStatus.GaveUp,
+        ProgressStatusDto.TimeUp => ProgressStatus.TimeUp,
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown progress status.")
     };
 }

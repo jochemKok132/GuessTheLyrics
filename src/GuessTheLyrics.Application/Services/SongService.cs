@@ -2,7 +2,9 @@ using GuessTheLyrics.Application.Caching;
 using GuessTheLyrics.Application.Interfaces;
 using GuessTheLyrics.Application.Mapping;
 using GuessTheLyrics.Application.Validation;
+using GuessTheLyrics.Domain.Exceptions;
 using GuessTheLyrics.Domain.Interfaces;
+using GuessTheLyrics.Domain.Models;
 using GuessTheLyrics.Shared;
 using GuessTheLyrics.Shared.Songs;
 
@@ -35,8 +37,19 @@ public sealed class SongService(ILyricsProvider lyricsProvider, IPuzzleCache puz
         if (puzzleCache.TryGet(id, out var cached))
             return cached;
 
-        var track = await lyricsProvider.GetByIdAsync(id, cancellationToken)
-                    ?? throw new KeyNotFoundException("Song not found.");
+        LyricsTrack? track;
+        try
+        {
+            track = await lyricsProvider.GetByIdAsync(id, cancellationToken);
+        }
+        catch (LyricsServiceException) when (puzzleCache.TryGetStale(id, out var stale))
+        {
+            // Lyrics don't change: an older copy is much better than an error while LRCLIB is down.
+            return stale;
+        }
+
+        if (track is null)
+            throw new KeyNotFoundException("Song not found.");
 
         if (!track.HasLyrics)
             throw new KeyNotFoundException("This song has no lyrics to guess (it may be instrumental).");

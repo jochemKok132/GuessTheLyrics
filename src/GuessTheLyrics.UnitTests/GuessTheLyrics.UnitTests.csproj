@@ -21,8 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\GuessTheLyrics.API\GuessTheLyrics.API.csproj" />
     <ProjectReference Include="..\GuessTheLyrics.Application\GuessTheLyrics.Application.csproj" />
     <ProjectReference Include="..\GuessTheLyrics.Domain\GuessTheLyrics.Domain.csproj" />
+    <ProjectReference Include="..\GuessTheLyrics.Infrastructure\GuessTheLyrics.Infrastructure.csproj" />
     <ProjectReference Include="..\GuessTheLyrics.Shared\GuessTheLyrics.Shared.csproj" />
   </ItemGroup>
 

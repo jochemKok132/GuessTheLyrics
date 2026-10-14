@@ -1,0 +1,199 @@
+@page "/multiplayer"
+@implements IDisposable
+@inject IMatchClient MatchClient
+@inject ISongService SongService
+@inject NavigationManager Navigation
+
+<PageTitle>Multiplayer · GuessTheLyrics</PageTitle>
+
+<h1 class="page-title" tabindex="-1">Multiplayer</h1>
+<p class="muted">Race other players on the same song: everyone gets the same lyrics and the same countdown. Most words wins; finishing first wins outright.</p>
+
+<AuthorizeView>
+    <NotAuthorized>
+        <div class="cta card">
+            <div>
+                <strong>Log in to play against others</strong>
+                <p class="muted">Matches are between accounts, so everyone sees who they're racing.</p>
+            </div>
+            <div class="account-actions">
+                <a class="btn" href="login?returnUrl=%2Fmultiplayer">Log in</a>
+                <a class="btn btn-secondary" href="register?returnUrl=%2Fmultiplayer">Sign up</a>
+            </div>
+        </div>
+    </NotAuthorized>
+    <Authorized>
+        <div class="mp-grid">
+            <section class="card mp-card">
+                <h2 class="section-title">Join with a code</h2>
+                <p class="muted small">Got a code from a friend? Type it here.</p>
+                <form class="search-bar compact" @onsubmit="JoinByCode">
+                    <input @bind="code" @bind:event="oninput" placeholder="e.g. K7Q2XD" maxlength="6"
+                           aria-label="Match code" autocomplete="off" autocapitalize="characters" class="code-input" />
+                    <button type="submit" class="btn" disabled="@(code.Trim().Length != 6)">Join</button>
+                </form>
+            </section>
+
+            <section class="card mp-card">
+                <h2 class="section-title">Start a match</h2>
+                <p class="muted small">Pick a song; you become the host and get a code to share.</p>
+                <form class="search-bar compact" @onsubmit="SearchAsync">
+                    <input type="search" @bind="query" @bind:event="oninput" placeholder="Song title and/or artist" aria-label="Search a song" autocomplete="off" />
+                    <button type="submit" class="btn" disabled="@(searching || string.IsNullOrWhiteSpace(query))">@(searching ? "Searching..." : "Search")</button>
+                </form>
+                <ErrorMessage Error="searchError" OnRetry="SearchAsync" />
+                @if (results is { Count: 0 })
+                {
+                    <p class="muted small">No songs with lyrics found.</p>
+                }
+                else if (results is not null)
+                {
+                    <ul class="mp-results">
+                        @foreach (var song in results.Take(8))
+                        {
+                            <li>
+                                <div class="mp-song">
+                                    <span class="title">@song.Title</span>
+                                    <span class="muted small">@song.Artist · @song.WordCount words</span>
+                                </div>
+                                <button class="btn btn-small" @onclick="() => CreateAsync(song.Id)" disabled="@(creatingFor is not null)">
+                                    @(creatingFor == song.Id ? "Creating..." : "Create match")
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+        </div>
+
+        <div class="section-head">
+            <h2 class="section-title">Open matches</h2>
+            <span class="muted small">Updates every few seconds</span>
+        </div>
+
+        <ErrorMessage Error="error" OnRetry="LoadOpenAsync" />
+
+        @if (openMatches is null && error is null)
+        {
+            <p class="muted">Loading...</p>
+        }
+        else if (openMatches is { Count: 0 })
+        {
+            <p class="muted">No open matches right now. Start one and share the code!</p>
+        }
+        else if (openMatches is not null)
+        {
+            <div class="card table-card">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Song</th>
+                            <th class="hide-small">Host</th>
+                            <th class="num">Players</th>
+                            <th class="num hide-small">Time</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var match in openMatches)
+                        {
+                            <tr>
+                                <td>
+                                    <span class="song-link">@match.Title</span>
+                                    <span class="muted song-artist">@match.Artist</span>
+                                </td>
+                                <td class="hide-small">@match.HostUsername</td>
+                                <td class="num">@match.PlayerCount / @match.MaxPlayers</td>
+                                <td class="num hide-small">@Format.Seconds(match.TimeLimitSeconds)</td>
+                                <td class="num"><a class="btn btn-small" href="match/@match.Code">Join</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private string code = string.Empty;
+    private string query = string.Empty;
+    private bool searching;
+    private List<SongSearchResultResponse>? results;
+    private UiError? searchError;
+    private long? creatingFor;
+
+    private List<MatchSummaryResponse>? openMatches;
+    private UiError? error;
+    private Timer? refresh;
+    private bool disposed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is null || (await AuthState).User.Identity?.IsAuthenticated != true)
+            return;
+
+        await LoadOpenAsync();
+        refresh = new Timer(_ => InvokeAsync(async () =>
+        {
+            if (disposed)
+                return;
+            await LoadOpenAsync();
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task LoadOpenAsync()
+    {
+        var response = await MatchClient.GetOpenAsync();
+        if (response.Succeeded)
+        {
+            openMatches = response.Value ?? [];
+            error = null;
+        }
+        else
+        {
+            error = UiError.From(response);
+        }
+    }
+
+    private void JoinByCode() => Navigation.NavigateTo($"match/{code.Trim().ToUpperInvariant()}");
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return;
+
+        searching = true;
+        searchError = null;
+        var response = await SongService.SearchAsync(query.Trim());
+        searching = false;
+
+        if (response.Succeeded)
+            results = response.Value ?? [];
+        else
+            searchError = UiError.From(response);
+    }
+
+    private async Task CreateAsync(long songId)
+    {
+        creatingFor = songId;
+        searchError = null;
+        var response = await MatchClient.CreateAsync(songId);
+        creatingFor = null;
+
+        if (response.Succeeded && response.Value is not null)
+            Navigation.NavigateTo($"match/{response.Value.Code}");
+        else
+            searchError = UiError.From(response);
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        refresh?.Dispose();
+    }
+}

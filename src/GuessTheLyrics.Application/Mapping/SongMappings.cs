@@ -1,5 +1,6 @@
 using GuessTheLyrics.Application.Lyrics;
 using GuessTheLyrics.Domain.Models;
+using GuessTheLyrics.Shared.Game;
 using GuessTheLyrics.Shared.Songs;
 
 namespace GuessTheLyrics.Application.Mapping;
@@ -19,6 +20,7 @@ public static class SongMappings
     public static LyricsPuzzleResponse ToPuzzleResponse(this LyricsTrack track)
     {
         var lines = LyricsTokenizer.Tokenize(track.PlainLyrics);
+        var uniqueWords = LyricsTokenizer.CountUniqueWords(lines);
 
         return new LyricsPuzzleResponse
         {
@@ -27,7 +29,8 @@ public static class SongMappings
             Artist = track.ArtistName,
             Album = track.AlbumName,
             TotalWords = LyricsTokenizer.CountWords(lines),
-            UniqueWords = LyricsTokenizer.CountUniqueWords(lines),
+            UniqueWords = uniqueWords,
+            TimeLimitSeconds = TimeLimits.ForUniqueWords(uniqueWords),
             Lines = lines
         };
     }

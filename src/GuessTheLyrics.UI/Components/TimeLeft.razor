@@ -1,0 +1,28 @@
+@* "Time left" stat with a shrinking bar; turns orange under 30 s and red under 10 s. *@
+
+<div class="stat time-stat @Urgency">
+    <span class="section-label">Time left</span>
+    <span class="stat-value">@Format.Time(Remaining)</span>
+    <div class="time-bar" aria-hidden="true">
+        <div class="time-bar-fill" style="width: @(Fraction)%"></div>
+    </div>
+    @if (!string.IsNullOrEmpty(Hint))
+    {
+        <span class="stat-hint">@Hint</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TimeSpan Remaining { get; set; }
+    [Parameter, EditorRequired] public TimeSpan Limit { get; set; }
+    [Parameter] public string? Hint { get; set; }
+
+    private int Fraction => Limit <= TimeSpan.Zero ? 0 : (int)Math.Clamp(Remaining.TotalSeconds * 100 / Limit.TotalSeconds, 0, 100);
+
+    private string Urgency => Remaining.TotalSeconds switch
+    {
+        <= 10 => "critical",
+        <= 30 => "low",
+        _ => ""
+    };
+}

@@ -8,5 +8,6 @@ public enum ProgressStatusDto
 {
     InProgress,
     Completed,
-    GaveUp
+    GaveUp,
+    TimeUp
 }

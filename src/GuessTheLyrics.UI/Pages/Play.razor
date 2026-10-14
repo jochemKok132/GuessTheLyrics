@@ -3,46 +3,57 @@
 @implements IDisposable
 @inject ISongService SongService
 @inject IProgressService ProgressService
+@inject IMatchClient MatchClient
 @inject NavigationManager Navigation
 
-<PageTitle>@(puzzle is null ? "GuessTheLyrics" : $"{puzzle.Title} · {puzzle.Artist}")</PageTitle>
+<PageTitle>@(game is null ? "GuessTheLyrics" : $"{game.Puzzle.Title} · {game.Puzzle.Artist}")</PageTitle>
 
 @if (loading)
 {
     <div class="spinner" aria-label="Loading lyrics"></div>
 }
-else if (error is not null || puzzle is null)
+else if (error is not null || game is null)
 {
     <h1 class="page-title" tabindex="-1">Can't play this song</h1>
-    <div class="alert-danger">@(error ?? "Something went wrong.")</div>
+    <ErrorMessage Error="@(error ?? new UiError("Something went wrong.", ErrorCodes.Unexpected, null))" OnRetry="RetryLoadAsync" />
     <p><a href="">Back to search</a></p>
 }
 else
 {
+    var puzzle = game.Puzzle;
+
     <div class="play-header">
         <div>
             <h1 class="page-title" tabindex="-1">@puzzle.Title</h1>
             <p class="muted">
                 @puzzle.Artist@(string.IsNullOrWhiteSpace(puzzle.Album) ? "" : $" · {puzzle.Album}")
-                · @puzzle.TotalWords words (@puzzle.UniqueWords different)
+                · @puzzle.TotalWords words (@puzzle.UniqueWords different) · @Format.Time(TimeLimit) to play
             </p>
         </div>
-        <a class="btn btn-secondary" href="">New song</a>
+        <div class="header-actions">
+            @if (loggedIn)
+            {
+                <button class="btn btn-secondary" @onclick="CreateMatchAsync" disabled="@creatingMatch">
+                    @(creatingMatch ? "Creating..." : "Play against others")
+                </button>
+            }
+            <a class="btn btn-secondary" href="">New song</a>
+        </div>
     </div>
+
+    <ErrorMessage Error="matchError" />
 
     <div class="game-bar card">
         <div class="stat">
             <span class="section-label">Words</span>
-            <span class="stat-value">@foundWordCount<span class="stat-total"> / @puzzle.TotalWords</span></span>
+            <span class="stat-value">@game.FoundWordCount<span class="stat-total"> / @puzzle.TotalWords</span></span>
         </div>
         <div class="stat">
             <span class="section-label">Score</span>
-            <span class="stat-value">@Percentage%</span>
+            <span class="stat-value">@game.Percentage%</span>
         </div>
-        <div class="stat">
-            <span class="section-label">Time</span>
-            <span class="stat-value">@Format.Time(Elapsed)</span>
-        </div>
+        <TimeLeft Remaining="Remaining" Limit="TimeLimit"
+                  Hint="@(state == GameState.Playing && !stopwatch.IsRunning ? "starts when you type" : null)" />
 
         <div class="guess-wrap">
             <input @ref="guessInput"
@@ -59,14 +70,14 @@ else
                    autocorrect="off"
                    spellcheck="false" />
             <div class="guess-status">
-                <span class="guess-feedback" aria-live="polite">@missedGuess</span>
+                <span class="guess-feedback" aria-live="polite">@game.Feedback</span>
                 <span class="save-state" aria-live="polite">@SaveLabel</span>
             </div>
         </div>
 
         @if (state == GameState.Playing)
         {
-            <button class="btn btn-secondary" @onclick="GiveUpAsync" disabled="@(foundWordCount == 0 && Elapsed == TimeSpan.Zero)">Give up</button>
+            <button class="btn btn-secondary" @onclick="GiveUpAsync" disabled="@(game.FoundWordCount == 0 && Elapsed == TimeSpan.Zero)">Give up</button>
         }
         else
         {
@@ -74,24 +85,33 @@ else
         }
     </div>
 
-    <div class="progress" role="progressbar" aria-valuenow="@Percentage" aria-valuemin="0" aria-valuemax="100">
-        <div class="progress-fill @(state == GameState.Won ? "complete" : "")" style="width: @(Percentage)%"></div>
+    <div class="progress" role="progressbar" aria-valuenow="@game.Percentage" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress-fill @(state == GameState.Won ? "complete" : "")" style="width: @(game.Percentage)%"></div>
     </div>
 
     @if (state == GameState.Won)
     {
-        <div class="alert-success">You typed every word of "@puzzle.Title" in @Format.Time(Elapsed)!</div>
+        <div class="alert-success">
+            You typed every word of "@puzzle.Title" in @Format.Time(Elapsed), with @Format.Time(Remaining) to spare!
+        </div>
+    }
+    else if (state == GameState.TimeUp)
+    {
+        <div class="alert-warning">
+            Time's up! You found @game.FoundWordCount of @puzzle.TotalWords words (@game.Percentage%).
+            The words you missed are shown in red.
+        </div>
     }
     else if (state == GameState.GaveUp)
     {
         <div class="alert-danger">
-            You found @foundWordCount of @puzzle.TotalWords words (@Percentage%) in @Format.Time(Elapsed).
+            You found @game.FoundWordCount of @puzzle.TotalWords words (@game.Percentage%) in @Format.Time(Elapsed).
             The words you missed are shown in red.
         </div>
     }
     else if (resumed)
     {
-        <div class="alert-info">Welcome back: your progress was restored. The timer continues when you start typing.</div>
+        <div class="alert-info">Welcome back: your progress was restored. The countdown continues when you start typing.</div>
     }
 
     @if (!loggedIn)
@@ -99,53 +119,12 @@ else
         <div class="alert-info">
             <a href="@($"login?returnUrl={Uri.EscapeDataString($"/play/{Id}")}")">Log in</a> or
             <a href="@($"register?returnUrl={Uri.EscapeDataString($"/play/{Id}")}")">sign up</a>
-            to save your progress on this song.
+            to save your progress and play against others.
         </div>
     }
 
     <div class="play-layout">
-        <div class="lyrics card">
-            @foreach (var verse in verses)
-            {
-                var verseFound = verse.Keys.Count(found.Contains);
-                var verseDone = verseFound == verse.Keys.Count && verse.Keys.Count > 0;
-
-                <section class="verse @(verseDone ? "complete" : "")">
-                    <div class="verse-head">
-                        <span>@verse.Label</span>
-                        @if (verse.Keys.Count > 0)
-                        {
-                            <span class="verse-count">@(verseDone ? "✓" : $"{verseFound}/{verse.Keys.Count}")</span>
-                        }
-                    </div>
-
-                    @foreach (var line in verse.Lines)
-                    {
-                        <div class="lyric-line">
-                            @foreach (var token in line.Tokens)
-                            {
-                                if (token.Key is null)
-                                {
-                                    <span class="sep">@token.Text</span>
-                                }
-                                else if (found.Contains(token.Key))
-                                {
-                                    <span class="word found @(token.Key == lastFound ? "just-found" : "")">@token.Text</span>
-                                }
-                                else if (state == GameState.GaveUp)
-                                {
-                                    <span class="word missed">@token.Text</span>
-                                }
-                                else
-                                {
-                                    <span class="word hidden" style="width: @(HiddenWidth(token.Text))px"></span>
-                                }
-                            }
-                        </div>
-                    }
-                </section>
-            }
-        </div>
+        <LyricsBoard Game="game" RevealMissed="@(state is GameState.GaveUp or GameState.TimeUp)" />
 
         <aside class="side-panel card">
             <div class="side-head">
@@ -197,10 +176,7 @@ else
 }
 
 @code {
-    private enum GameState { Playing, Won, GaveUp }
-
-    /// <summary>Lines between two blank lines, with an optional "[Chorus]"-style label.</summary>
-    private sealed record Verse(string Label, List<LyricsLineResponse> Lines, HashSet<string> Keys);
+    private enum GameState { Playing, Won, GaveUp, TimeUp }
 
     private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromSeconds(10);
 
@@ -210,23 +186,16 @@ else
     [CascadingParameter]
     private Task<AuthenticationState>? AuthState { get; set; }
 
-    private LyricsPuzzleResponse? puzzle;
-    private List<Verse> verses = [];
+    private GuessGame? game;
     private bool loading = true;
-    private string? error;
+    private UiError? error;
     private long loadedId;
 
-    // Normalised word → how many times it appears in the song.
-    private Dictionary<string, int> wordCounts = [];
-    private readonly HashSet<string> found = [];
-    private int foundWordCount;
-    private string? lastFound;
     private string guess = string.Empty;
     private GameState state = GameState.Playing;
     private bool resumed;
-    private string? missedGuess;
 
-    // Time = time from a saved attempt + time played in this visit.
+    // Time used = time from a saved attempt + time played in this visit. The countdown is the limit minus that.
     private TimeSpan elapsedOffset;
     private readonly Stopwatch stopwatch = new();
     private Timer? clock;
@@ -245,15 +214,26 @@ else
     private bool disposed;
     private List<SongPlayerResponse>? songPlayers;
 
-    private TimeSpan Elapsed => elapsedOffset + stopwatch.Elapsed;
+    // Multiplayer
+    private bool creatingMatch;
+    private UiError? matchError;
 
-    private int Percentage => puzzle is null || puzzle.TotalWords == 0
-        ? 0
-        : (int)Math.Floor(foundWordCount * 100.0 / puzzle.TotalWords);
+    private TimeSpan TimeLimit => TimeSpan.FromSeconds(game?.Puzzle.TimeLimitSeconds ?? 0);
+
+    private TimeSpan Elapsed
+    {
+        get
+        {
+            var elapsed = elapsedOffset + stopwatch.Elapsed;
+            return elapsed > TimeLimit ? TimeLimit : elapsed;
+        }
+    }
+
+    private TimeSpan Remaining => TimeLimit - Elapsed;
 
     private string SaveLabel => !loggedIn ? ""
         : saving ? "Saving..."
-        : saveError is not null ? $"Not saved: {saveError}"
+        : saveError is not null ? $"Not saved: {saveError} (retrying)"
         : dirty ? "Unsaved changes"
         : savedOnce ? "Progress saved" : "";
 
@@ -273,22 +253,27 @@ else
         if (dirty)
             await SaveAsync();
 
+        await LoadAsync();
+    }
+
+    private async Task RetryLoadAsync()
+    {
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadAsync()
+    {
         loadedId = Id;
         loading = true;
         error = null;
-        puzzle = null;
+        game = null;
         songPlayers = null;
 
         var response = await SongService.GetPuzzleAsync(Id);
         if (response.Succeeded && response.Value is not null)
         {
-            puzzle = response.Value;
-            wordCounts = puzzle.Lines
-                .SelectMany(l => l.Tokens)
-                .Where(t => t.Key is not null)
-                .GroupBy(t => t.Key!)
-                .ToDictionary(g => g.Key, g => g.Count());
-            verses = BuildVerses(puzzle.Lines);
+            game = new GuessGame(response.Value);
             ResetGame();
 
             if (loggedIn)
@@ -296,18 +281,18 @@ else
         }
         else
         {
-            error = response.Message;
+            error = UiError.From(response);
         }
 
         loading = false;
 
-        if (puzzle is not null)
+        if (game is not null)
             await LoadPlayersAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (focusPending && puzzle is not null && !loading && state == GameState.Playing)
+        if (focusPending && game is not null && !loading && state == GameState.Playing)
         {
             focusPending = false;
             try
@@ -326,34 +311,22 @@ else
 
     private void CheckGuess()
     {
-        if (state != GameState.Playing)
+        if (game is null || state != GameState.Playing)
             return;
 
-        // Space or Enter means "this is my word": accept it, or clear a wrong guess.
-        var submitted = guess.Length > 0 && char.IsWhiteSpace(guess[^1]);
-        var key = WordNormalizer.Normalize(guess);
+        var result = game.Guess(guess);
+        guess = result.Input;
 
-        if (key.Length == 0)
+        if (result.Typed)
+            StartClock();
+
+        if (result.Accepted)
         {
-            if (submitted)
-                guess = string.Empty;
-            return;
-        }
+            dirty = true;
+            resumed = false;
 
-        StartClock();
-
-        var isUnfoundWord = wordCounts.ContainsKey(key) && !found.Contains(key);
-
-        // Accept right away, unless a longer unfound word starts with what you typed
-        // ("a" while "again" is still hidden): then keep typing, or press space for the short word.
-        if (isUnfoundWord && (submitted || !LongerUnfoundWordStartsWith(key)))
-        {
-            Accept(key);
-        }
-        else if (submitted)
-        {
-            missedGuess = found.Contains(key) ? $"\"{key}\" is already found" : $"\"{key}\" is not in the song";
-            guess = string.Empty;
+            if (game.AllFound)
+                _ = EndGameAsync(GameState.Won);
         }
     }
 
@@ -366,27 +339,13 @@ else
         }
     }
 
-    private bool LongerUnfoundWordStartsWith(string key) =>
-        wordCounts.Keys.Any(k => k.Length > key.Length && !found.Contains(k) && k.StartsWith(key, StringComparison.Ordinal));
-
-    private void Accept(string key)
-    {
-        found.Add(key);
-        foundWordCount += wordCounts[key];
-        lastFound = key;
-        missedGuess = null;
-        guess = string.Empty;
-        dirty = true;
-        resumed = false;
-
-        if (found.Count == wordCounts.Count)
-            _ = EndGameAsync(GameState.Won);
-    }
-
     private Task GiveUpAsync() => EndGameAsync(GameState.GaveUp);
 
     private async Task EndGameAsync(GameState endState)
     {
+        if (state != GameState.Playing)
+            return;
+
         state = endState;
         guess = string.Empty;
         resumed = false;
@@ -407,10 +366,7 @@ else
         StopClock();
         stopwatch.Reset();
         elapsedOffset = TimeSpan.Zero;
-        found.Clear();
-        foundWordCount = 0;
-        lastFound = null;
-        missedGuess = null;
+        game?.Reset();
         guess = string.Empty;
         state = GameState.Playing;
         resumed = false;
@@ -423,7 +379,7 @@ else
             return;
 
         stopwatch.Start();
-        clock = new Timer(_ => InvokeAsync(OnTickAsync), null, TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500));
+        clock = new Timer(_ => InvokeAsync(OnTickAsync), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
     }
 
     private void StopClock()
@@ -438,8 +394,14 @@ else
         if (disposed)
             return;
 
-        if (dirty && DateTime.UtcNow - lastSave >= AutoSaveInterval)
+        if (state == GameState.Playing && Remaining <= TimeSpan.Zero)
+        {
+            await EndGameAsync(GameState.TimeUp);
+        }
+        else if (dirty && DateTime.UtcNow - lastSave >= AutoSaveInterval)
+        {
             await SaveAsync();
+        }
 
         StateHasChanged();
     }
@@ -449,29 +411,26 @@ else
     private async Task RestoreProgressAsync()
     {
         var response = await ProgressService.GetMineAsync(Id);
-        if (!response.Succeeded || response.Value is not { } saved)
+        if (game is null || !response.Succeeded || response.Value is not { } saved)
             return;
 
-        foreach (var key in saved.FoundKeys ?? [])
-        {
-            if (wordCounts.TryGetValue(key, out var count) && found.Add(key))
-                foundWordCount += count;
-        }
-
+        game.Restore(saved.FoundKeys ?? []);
         elapsedOffset = TimeSpan.FromSeconds(saved.ElapsedSeconds);
         state = saved.Status switch
         {
             ProgressStatusDto.Completed => GameState.Won,
             ProgressStatusDto.GaveUp => GameState.GaveUp,
+            ProgressStatusDto.TimeUp => GameState.TimeUp,
+            _ when Remaining <= TimeSpan.Zero => GameState.TimeUp, // saved before the countdown ran out, never finished
             _ => GameState.Playing
         };
-        resumed = state == GameState.Playing && found.Count > 0;
+        resumed = state == GameState.Playing && game.Found.Count > 0;
         savedOnce = true;
     }
 
     private async Task SaveAsync()
     {
-        if (!loggedIn || puzzle is null)
+        if (!loggedIn || game is null)
             return;
 
         // One save at a time; a save requested meanwhile runs right after with the latest state.
@@ -482,7 +441,7 @@ else
         }
 
         saving = true;
-        var songId = puzzle.Id;
+        var songId = game.Puzzle.Id;
 
         do
         {
@@ -492,9 +451,14 @@ else
 
             var request = new SaveProgressRequest
             {
-                FoundKeys = found.ToList(),
-                ElapsedSeconds = (int)Elapsed.TotalSeconds,
-                Status = state == GameState.GaveUp ? ProgressStatusDto.GaveUp : ProgressStatusDto.InProgress
+                FoundKeys = game.Found.ToList(),
+                ElapsedSeconds = (int)Math.Round(Elapsed.TotalSeconds),
+                Status = state switch
+                {
+                    GameState.GaveUp => ProgressStatusDto.GaveUp,
+                    GameState.TimeUp => ProgressStatusDto.TimeUp,
+                    _ => ProgressStatusDto.InProgress
+                }
             };
 
             var response = await ProgressService.SaveAsync(songId, request);
@@ -530,44 +494,21 @@ else
         songPlayers = response.Succeeded ? response.Value ?? [] : [];
     }
 
-    // ---------- Layout ----------
+    // ---------- Multiplayer ----------
 
-    private static List<Verse> BuildVerses(IReadOnlyList<LyricsLineResponse> lines)
+    private async Task CreateMatchAsync()
     {
-        var result = new List<Verse>();
-        Verse? current = null;
+        creatingMatch = true;
+        matchError = null;
 
-        foreach (var line in lines)
-        {
-            if (line.Tokens.Count == 0)
-            {
-                current = null; // blank line: next line starts a new verse
-                continue;
-            }
+        var response = await MatchClient.CreateAsync(Id);
 
-            if (line.IsHeader)
-            {
-                current = new Verse(line.Tokens[0].Text.Trim('[', ']', ' '), [], []);
-                result.Add(current);
-                continue;
-            }
-
-            if (current is null)
-            {
-                current = new Verse(string.Empty, [], []);
-                result.Add(current);
-            }
-
-            current.Lines.Add(line);
-            foreach (var token in line.Tokens.Where(t => t.Key is not null))
-                current.Keys.Add(token.Key!);
-        }
-
-        // A label followed by a blank line gives an empty verse; drop those.
-        return result.Where(v => v.Lines.Count > 0).ToList();
+        creatingMatch = false;
+        if (response.Succeeded && response.Value is not null)
+            Navigation.NavigateTo($"match/{response.Value.Code}");
+        else
+            matchError = UiError.From(response);
     }
-
-    private static int HiddenWidth(string word) => Math.Clamp(word.Length * 9 + 4, 14, 220);
 
     public void Dispose()
     {
@@ -575,7 +516,7 @@ else
         clock?.Dispose();
 
         // Leaving the page with unsaved words: save them in the background.
-        if (dirty && loggedIn && puzzle is not null)
+        if (dirty && loggedIn && game is not null)
             _ = SaveAsync();
     }
 }

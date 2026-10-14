@@ -8,8 +8,9 @@ public sealed class SaveProgressRequest
     public int ElapsedSeconds { get; set; }
 
     /// <summary>
-    /// <see cref="ProgressStatusDto.InProgress"/> while playing (an empty list starts a new attempt) or
-    /// <see cref="ProgressStatusDto.GaveUp"/>. Completed is decided by the server when every word is found.
+    /// <see cref="ProgressStatusDto.InProgress"/> while playing (an empty list starts a new attempt),
+    /// <see cref="ProgressStatusDto.GaveUp"/> or <see cref="ProgressStatusDto.TimeUp"/>. Completed is decided by the
+    /// server when every word is found within the time limit.
     /// </summary>
     public ProgressStatusDto Status { get; set; } = ProgressStatusDto.InProgress;
 }

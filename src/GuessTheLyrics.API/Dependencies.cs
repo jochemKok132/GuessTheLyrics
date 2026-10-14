@@ -10,6 +10,7 @@ using GuessTheLyrics.Application.Interfaces;
 using GuessTheLyrics.Shared;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
 namespace GuessTheLyrics.API;
@@ -17,6 +18,8 @@ namespace GuessTheLyrics.API;
 public static class Dependencies
 {
     public const string FrontendCorsPolicy = "Frontend";
+    public const int RequestsPerMinute = 60;
+    public const int MatchRequestsPerMinute = 240;
 
     public static IServiceCollection RegisterAPI(this IServiceCollection services, IConfiguration configuration)
     {
@@ -33,7 +36,14 @@ public static class Dependencies
     private static void RegisterControllers(this IServiceCollection services)
     {
         services.AddControllers()
-            .AddJsonOptions(options => ConfigureJson(options.JsonSerializerOptions));
+            .AddJsonOptions(options => ConfigureJson(options.JsonSerializerOptions))
+            // Invalid JSON, wrong types or a missing body: same ApiResponse envelope as every other error.
+            .ConfigureApiBehaviorOptions(options =>
+            {
+                options.InvalidModelStateResponseFactory = ApiErrorResponses.InvalidModelState;
+                // No automatic ProblemDetails bodies for 4xx results (e.g. 415): UseApiStatusCodePages fills them in.
+                options.SuppressMapClientErrors = true;
+            });
 
         // Used by WriteAsJsonAsync in the exception handler and rate limiter, so error bodies match.
         services.ConfigureHttpJsonOptions(options => ConfigureJson(options.SerializerOptions));
@@ -107,12 +117,21 @@ public static class Dependencies
                     {
                         context.HandleResponse();
                         context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
-                        await context.Response.WriteAsJsonAsync(ApiResponse<object>.Fail("You need to be logged in."));
+
+                        var message = context.AuthenticateFailure is SecurityTokenExpiredException
+                            ? "Your session has expired. Log in again."
+                            : context.AuthenticateFailure is not null
+                                ? "Your login is not valid any more. Log in again."
+                                : "You need to be logged in.";
+
+                        await context.Response.WriteAsJsonAsync(
+                            ApiResponse<object>.Fail(message, ErrorCodes.Unauthorized, TraceIds.Get(context.HttpContext)));
                     },
                     OnForbidden = async context =>
                     {
                         context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
-                        await context.Response.WriteAsJsonAsync(ApiResponse<object>.Fail("You are not allowed to do this."));
+                        await context.Response.WriteAsJsonAsync(
+                            ApiResponse<object>.Fail("You are not allowed to do this.", ErrorCodes.Forbidden, TraceIds.Get(context.HttpContext)));
                     }
                 };
             });
@@ -125,23 +144,37 @@ public static class Dependencies
         services.AddRateLimiter(options =>
         {
             // Partitioned per logged-in player, falling back to the IP address for anonymous requests.
+            // Multiplayer polls about once a second, so /api/matches has its own, bigger budget.
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
-                RateLimitPartition.GetFixedWindowLimiter(
-                    context.User.FindFirstValue(AppClaims.UserId)
-                        ?? context.Connection.RemoteIpAddress?.ToString()
-                        ?? "unknown",
+            {
+                var who = context.User.FindFirstValue(AppClaims.UserId)
+                          ?? context.Connection.RemoteIpAddress?.ToString()
+                          ?? "unknown";
+                var isMatch = context.Request.Path.StartsWithSegments("/api/matches");
+
+                return RateLimitPartition.GetFixedWindowLimiter(
+                    isMatch ? $"matches:{who}" : who,
                     _ => new FixedWindowRateLimiterOptions
                     {
-                        PermitLimit = 60,
+                        PermitLimit = isMatch ? MatchRequestsPerMinute : RequestsPerMinute,
                         Window = TimeSpan.FromMinutes(1),
                         QueueLimit = 0
-                    }));
+                    });
+            });
 
             options.OnRejected = async (context, cancellationToken) =>
             {
-                context.HttpContext.Response.StatusCode = (int)HttpStatusCode.TooManyRequests;
-                await context.HttpContext.Response.WriteAsJsonAsync(
-                    ApiResponse<object>.Fail("Too many requests. Wait a minute and try again."),
+                var response = context.HttpContext.Response;
+                response.StatusCode = (int)HttpStatusCode.TooManyRequests;
+
+                var seconds = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter)
+                    ? (int)Math.Ceiling(retryAfter.TotalSeconds)
+                    : 60;
+                response.Headers.RetryAfter = seconds.ToString();
+
+                await response.WriteAsJsonAsync(
+                    ApiResponse<object>.Fail($"Too many requests. Wait {seconds} seconds and try again.",
+                        ErrorCodes.RateLimited, TraceIds.Get(context.HttpContext)),
                     cancellationToken);
             };
         });

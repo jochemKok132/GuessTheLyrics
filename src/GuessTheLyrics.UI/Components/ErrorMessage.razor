@@ -1,0 +1,42 @@
+@* Shows a failed API call: the message, a "Try again" button when retrying can help, and the trace id for bug reports. *@
+
+@if (Error is not null)
+{
+    <div class="alert-danger error-message" role="alert">
+        <div class="error-text">
+            <span>@Error.Message</span>
+            @if (!string.IsNullOrEmpty(Error.TraceId))
+            {
+                <span class="error-trace">Trace id: @Error.TraceId</span>
+            }
+        </div>
+        @if (OnRetry.HasDelegate && Error.IsRetryable)
+        {
+            <button class="btn btn-secondary btn-small" @onclick="RetryAsync" disabled="@retrying">
+                @(retrying ? "Trying..." : "Try again")
+            </button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public UiError? Error { get; set; }
+
+    /// <summary>Optional: when set and the error is temporary, a "Try again" button calls it.</summary>
+    [Parameter] public EventCallback OnRetry { get; set; }
+
+    private bool retrying;
+
+    private async Task RetryAsync()
+    {
+        retrying = true;
+        try
+        {
+            await OnRetry.InvokeAsync();
+        }
+        finally
+        {
+            retrying = false;
+        }
+    }
+}

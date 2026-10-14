@@ -22,7 +22,7 @@
 
 @if (error is not null)
 {
-    <div class="alert-danger">@error</div>
+    <ErrorMessage Error="error" OnRetry="() => SearchAsync(lastQuery ?? query)" />
 }
 else if (searching)
 {
@@ -134,7 +134,7 @@ else if (results is not null)
     private string query = string.Empty;
     private string? lastQuery;
     private bool searching;
-    private string? error;
+    private UiError? error;
     private List<SongSearchResultResponse>? results;
 
     protected override async Task OnParametersSetAsync()
@@ -172,6 +172,6 @@ else if (results is not null)
         if (response.Succeeded)
             results = response.Value ?? [];
         else
-            error = response.Message;
+            error = UiError.From(response);
     }
 }

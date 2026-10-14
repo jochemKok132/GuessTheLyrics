@@ -10,7 +10,7 @@
 
     @if (error is not null)
     {
-        <div class="alert-danger">@error</div>
+        <ErrorMessage Error="error" OnRetry="SubmitAsync" />
     }
 
     <form class="form" @onsubmit="SubmitAsync">
@@ -43,7 +43,7 @@
     private readonly RegisterRequest request = new();
     private string repeatPassword = string.Empty;
     private bool busy;
-    private string? error;
+    private UiError? error;
 
     private string ReturnQuery => string.IsNullOrEmpty(ReturnUrl) ? "" : $"?returnUrl={Uri.EscapeDataString(ReturnUrl)}";
 
@@ -51,7 +51,7 @@
     {
         if (request.Password != repeatPassword)
         {
-            error = "The passwords don't match.";
+            error = new UiError("The passwords don't match.", ErrorCodes.Validation, null);
             return;
         }
 
@@ -64,6 +64,6 @@
         if (response.Succeeded)
             Navigation.NavigateTo(Login.SafeReturnUrl(ReturnUrl));
         else
-            error = response.Message;
+            error = UiError.From(response);
     }
 }

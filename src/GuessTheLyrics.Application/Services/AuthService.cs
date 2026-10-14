@@ -2,6 +2,7 @@ using System.Security.Authentication;
 using GuessTheLyrics.Application.Interfaces;
 using GuessTheLyrics.Application.Validation;
 using GuessTheLyrics.Domain.Entities;
+using GuessTheLyrics.Domain.Exceptions;
 using GuessTheLyrics.Domain.Interfaces;
 using GuessTheLyrics.Shared.Auth;
 
@@ -17,7 +18,7 @@ public sealed class AuthService(IUserRepository userRepository, IPassword passwo
         var normalized = AuthValidation.NormalizeUsername(username);
 
         if (await userRepository.ExistsAsync(normalized, cancellationToken))
-            throw new ArgumentException("That username is already taken.");
+            throw new ConflictException("That username is already taken.");
 
         var user = new User
         {
@@ -26,7 +27,15 @@ public sealed class AuthService(IUserRepository userRepository, IPassword passwo
             HashedPassword = password.Hash(request.Password)
         };
 
-        await userRepository.AddAsync(user, cancellationToken);
+        try
+        {
+            await userRepository.AddAsync(user, cancellationToken);
+        }
+        catch (ConflictException ex)
+        {
+            // Someone registered the same name between the check above and this insert.
+            throw new ConflictException("That username is already taken.", ex);
+        }
         return CreateResponse(user);
     }
 

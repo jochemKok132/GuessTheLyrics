@@ -1,5 +1,6 @@
 using GuessTheLyrics.Application.Caching;
 using GuessTheLyrics.Application.Services;
+using GuessTheLyrics.Domain.Exceptions;
 using GuessTheLyrics.Domain.Interfaces;
 using GuessTheLyrics.Domain.Models;
 using GuessTheLyrics.Shared.Songs;
@@ -154,5 +155,42 @@ public class SongServiceTests
         await _sut.GetPuzzleAsync(42);
 
         _lyricsProvider.Verify(p => p.GetByIdAsync(42, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetPuzzleAsync_LyricsServiceDownButOlderCopyCached_ReturnsCachedCopy()
+    {
+        var stale = new LyricsPuzzleResponse { Id = 42, Title = "Cached" };
+        var cache = new Mock<IPuzzleCache>();
+        cache.Setup(c => c.TryGet(42, out It.Ref<LyricsPuzzleResponse>.IsAny)).Returns(false);
+        cache.Setup(c => c.TryGetStale(42, out stale)).Returns(true);
+        _lyricsProvider.Setup(p => p.GetByIdAsync(42, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new LyricsServiceException(LyricsServiceFailure.Unavailable, "down"));
+        var sut = new SongService(_lyricsProvider.Object, cache.Object);
+
+        var puzzle = await sut.GetPuzzleAsync(42);
+
+        Assert.Equal("Cached", puzzle.Title);
+    }
+
+    [Fact]
+    public async Task GetPuzzleAsync_LyricsServiceDownAndNothingCached_ThrowsLyricsServiceException()
+    {
+        _lyricsProvider.Setup(p => p.GetByIdAsync(42, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new LyricsServiceException(LyricsServiceFailure.Unavailable, "down"));
+
+        await Assert.ThrowsAsync<LyricsServiceException>(() => _sut.GetPuzzleAsync(42));
+    }
+
+    [Fact]
+    public async Task SearchAsync_LyricsServiceDown_LetsLyricsServiceExceptionThrough()
+    {
+        _lyricsProvider.Setup(p => p.SearchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new LyricsServiceException(LyricsServiceFailure.Timeout, "slow"));
+
+        var exception = await Assert.ThrowsAsync<LyricsServiceException>(() =>
+            _sut.SearchAsync(new SongSearchRequest { Query = "the bad touch" }));
+
+        Assert.Equal(LyricsServiceFailure.Timeout, exception.Failure);
     }
 }

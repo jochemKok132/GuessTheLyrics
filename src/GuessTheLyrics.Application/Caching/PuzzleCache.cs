@@ -5,12 +5,17 @@ namespace GuessTheLyrics.Application.Caching;
 public interface IPuzzleCache
 {
     bool TryGet(long songId, out LyricsPuzzleResponse puzzle);
+
+    /// <summary>Also returns an expired entry: used as a fallback while the lyrics service is down.</summary>
+    bool TryGetStale(long songId, out LyricsPuzzleResponse puzzle);
+
     void Set(long songId, LyricsPuzzleResponse puzzle);
 }
 
 /// <summary>
 /// In-memory cache of tokenised lyrics. Saving progress needs the puzzle to validate the found words,
-/// so without this every save would call the lyrics service again. Single-instance only.
+/// so without this every save would call the lyrics service again. Expired entries stay until the cache is full,
+/// so a song that was played before keeps working while the lyrics service is down. Single-instance only.
 /// </summary>
 public sealed class PuzzleCache : IPuzzleCache
 {
@@ -30,7 +35,21 @@ public sealed class PuzzleCache : IPuzzleCache
                 return true;
             }
 
-            _entries.Remove(songId);
+            puzzle = null!;
+            return false;
+        }
+    }
+
+    public bool TryGetStale(long songId, out LyricsPuzzleResponse puzzle)
+    {
+        lock (_lock)
+        {
+            if (_entries.TryGetValue(songId, out var entry))
+            {
+                puzzle = entry.Puzzle;
+                return true;
+            }
+
             puzzle = null!;
             return false;
         }

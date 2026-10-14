@@ -10,4 +10,9 @@ public static class ClaimsPrincipalExtensions
         Guid.TryParse(user.FindFirstValue(AppClaims.UserId), out var id)
             ? id
             : throw new AuthenticationException("You need to be logged in.");
+
+    public static string GetUsername(this ClaimsPrincipal user) =>
+        user.FindFirstValue(AppClaims.Username) is { Length: > 0 } name
+            ? name
+            : throw new AuthenticationException("You need to be logged in.");
 }

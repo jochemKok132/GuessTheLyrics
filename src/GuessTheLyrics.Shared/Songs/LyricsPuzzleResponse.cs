@@ -13,6 +13,9 @@ public sealed class LyricsPuzzleResponse
     /// <summary>Number of different words the player has to type.</summary>
     public int UniqueWords { get; init; }
 
+    /// <summary>Countdown for this song in seconds, see <see cref="Game.TimeLimits"/>.</summary>
+    public int TimeLimitSeconds { get; init; }
+
     public IReadOnlyList<LyricsLineResponse> Lines { get; init; } = [];
 }
 
