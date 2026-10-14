@@ -3,7 +3,7 @@
 #
 #   update.sh            install the latest release if it is new (run every 5 minutes by the systemd timer)
 #   update.sh v1.2.3     install exactly that version and pin it (rollback); the timer then leaves it alone
-#   update.sh latest     unpin and install the latest release
+#   update.sh latest     unpin and (re)install the latest release, also when it is already installed
 #
 # Per update: back up the database, set APP_VERSION in .env, pull + restart, wait until
 # /api/system/version reports the new version. If it doesn't within HEALTH_TIMEOUT seconds, the previous
@@ -132,6 +132,8 @@ install_version() {
     grep -qxF "$target" "$FAILED_FILE" || echo "$target" >> "$FAILED_FILE"
 
     if [ -z "$previous" ]; then
+        # Nothing ran before: clear APP_VERSION again, otherwise the next run thinks $target is installed.
+        set_env APP_VERSION ""
         log "There is no previous version to roll back to; check: docker compose logs api"
         return 1
     fi
@@ -153,7 +155,8 @@ install_latest() {
     if [ -z "$tag" ]; then log "No published release yet."; return 0; fi
     target="${tag#v}"
 
-    if [ "$target" = "$(get_env APP_VERSION)" ]; then return 0; fi   # already running: stay quiet
+    # Already installed: stay quiet. 'update.sh latest' (force) reinstalls it, e.g. after a failed first install.
+    if [ "${1:-}" != "force" ] && [ "$target" = "$(get_env APP_VERSION)" ]; then return 0; fi
     if [ "${1:-}" != "force" ] && grep -qxF "$target" "$FAILED_FILE"; then
         log "Skipping $target: it failed before. Install it anyway with: update.sh latest"
         return 0
